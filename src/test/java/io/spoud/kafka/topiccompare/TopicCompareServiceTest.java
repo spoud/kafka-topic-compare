@@ -47,8 +47,10 @@ public class TopicCompareServiceTest {
         // Assert differences: Only in A (1,2), Only in B (5,6)
         long onlyInA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_A).count();
         long onlyInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_B).count();
+        long missingAtEnd = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.MISSING_AT_END).count();
         assert onlyInA == 2 : "Expected 2 ONLY_IN_A, got " + onlyInA;
-        assert onlyInB == 2 : "Expected 2 ONLY_IN_B, got " + onlyInB;
+        assert missingAtEnd == 2 : "Expected 2 MISSING_AT_END, got " + missingAtEnd;
+        assert onlyInB == 0 : "Expected 0 ONLY_IN_B, got " + onlyInB;
     }
 
     private void produceTestMessages(KafkaProducer<byte[], byte[]> producer, String topic, int[] values) {
@@ -115,11 +117,10 @@ public class TopicCompareServiceTest {
     void testExtraMessagesInA() {
         String topicA = "extra-a";
         String topicB = "extra-b";
-        long ts = System.currentTimeMillis();
-        byte[] key = new byte[]{1};
-        byte[] value = new byte[]{10};
-        // Only produce to A
-        produceTestMessage(kafkaA.getBootstrapServers(), topicA, key, value, ts);
+        // A: 1,2,3,4,5; B: 1,2,4,5 (3 is missing in B)
+        produceTestMessages(kafkaA.getBootstrapServers(), topicA, new int[]{1,2,3,4,5});
+        produceTestMessages(kafkaB.getBootstrapServers(), topicB, new int[]{1,2,4,5});
+        try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         Properties propsA = new Properties();
         propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
         propsA.put("group.id", "extra-a");
@@ -142,11 +143,10 @@ public class TopicCompareServiceTest {
     void testExtraMessagesInB() {
         String topicA = "extra2-a";
         String topicB = "extra2-b";
-        long ts = System.currentTimeMillis();
-        byte[] key = new byte[]{2};
-        byte[] value = new byte[]{20};
-        // Only produce to B
-        produceTestMessage(kafkaB.getBootstrapServers(), topicB, key, value, ts);
+        // A: 1,2,4,5; B: 1,2,3,4,5 (3 is missing in A)
+        produceTestMessages(kafkaA.getBootstrapServers(), topicA, new int[]{1,2,4,5});
+        produceTestMessages(kafkaB.getBootstrapServers(), topicB, new int[]{1,2,3,4,5});
+        try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         Properties propsA = new Properties();
         propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
         propsA.put("group.id", "extra2-a");
@@ -172,8 +172,11 @@ public class TopicCompareServiceTest {
         long ts = System.currentTimeMillis();
         // Unique in A
         produceTestMessage(kafkaA.getBootstrapServers(), topicA, new byte[]{1}, new byte[]{10}, ts);
+        produceTestMessage(kafkaA.getBootstrapServers(), topicA, new byte[]{3}, new byte[]{11}, ts);
         // Unique in B
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, new byte[]{2}, new byte[]{20}, ts);
+        produceTestMessage(kafkaB.getBootstrapServers(), topicB, new byte[]{3}, new byte[]{11}, ts);
+        try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         Properties propsA = new Properties();
         propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
         propsA.put("group.id", "unique-a");

@@ -64,11 +64,16 @@ public class TopicCompareService {
                     return "null:null";
                 }
             };
+            boolean reachedEndA = false;
+            boolean reachedEndB = false;
             // Read messages from topic A
             int countA = 0;
             while (countA < maxMessages) {
                 var records = consumerA.poll(Duration.ofSeconds(1));
-                if (records.isEmpty()) break;
+                if (records.isEmpty()) {
+                    reachedEndA = true;
+                    break;
+                }
                 for (var record : records) {
                     String key = keyHash.apply(record.key(), record.value());
                     if (seenA.contains(key)) {
@@ -87,7 +92,10 @@ public class TopicCompareService {
             int countB = 0;
             while (countB < maxMessages) {
                 var records = consumerB.poll(Duration.ofSeconds(1));
-                if (records.isEmpty()) break;
+                if (records.isEmpty()) {
+                    reachedEndB = true;
+                    break;
+                }
                 for (var record : records) {
                     String key = keyHash.apply(record.key(), record.value());
                     if (seenB.contains(key)) {
@@ -107,6 +115,25 @@ public class TopicCompareService {
             allKeys.addAll(recordsA.keySet());
             allKeys.addAll(recordsB.keySet());
 
+            // Identify contiguous missing block at the end for A
+            Set<String> missingAtEndA = new HashSet<>();
+            if (reachedEndA && reachedEndB && !orderA.isEmpty()) {
+                int idx = orderA.size() - 1;
+                while (idx >= 0 && !recordsB.containsKey(orderA.get(idx))) {
+                    missingAtEndA.add(orderA.get(idx));
+                    idx--;
+                }
+            }
+            // Identify contiguous missing block at the end for B
+            Set<String> missingAtEndB = new HashSet<>();
+            if (reachedEndA && reachedEndB && !orderB.isEmpty()) {
+                int idx = orderB.size() - 1;
+                while (idx >= 0 && !recordsA.containsKey(orderB.get(idx))) {
+                    missingAtEndB.add(orderB.get(idx));
+                    idx--;
+                }
+            }
+
             for (String key : allKeys) {
                 boolean inA = recordsA.containsKey(key);
                 boolean inB = recordsB.containsKey(key);
@@ -117,9 +144,17 @@ public class TopicCompareService {
                         logger.log(new Difference(Difference.Type.HEADER_DIFFERENCE, recA, recB, key));
                     }
                 } else if (inA && !inB) {
-                    logger.log(new Difference(Difference.Type.ONLY_IN_A, recordsA.get(key), null, key));
+                    if (missingAtEndA.contains(key) && missingAtEndA.size() > 0) {
+                        logger.log(new Difference(Difference.Type.MISSING_AT_END, recordsA.get(key), null, key));
+                    } else {
+                        logger.log(new Difference(Difference.Type.ONLY_IN_A, recordsA.get(key), null, key));
+                    }
                 } else if (!inA && inB) {
-                    logger.log(new Difference(Difference.Type.ONLY_IN_B, null, recordsB.get(key), key));
+                    if (missingAtEndB.contains(key) && missingAtEndB.size() > 0) {
+                        logger.log(new Difference(Difference.Type.MISSING_AT_END, null, recordsB.get(key), key));
+                    } else {
+                        logger.log(new Difference(Difference.Type.ONLY_IN_B, null, recordsB.get(key), key));
+                    }
                 }
             }
 
