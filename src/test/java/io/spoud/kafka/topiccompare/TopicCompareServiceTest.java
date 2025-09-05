@@ -609,4 +609,99 @@ public class TopicCompareServiceTest {
         // Only messages with i >= 5 should be compared
         assert logger.getDifferences().isEmpty() : "Expected no differences for messages at/after start timestamp, got " + logger.getDifferences();
     }
+
+    @Test
+    void testIgnoreOffsetDifferencesWithStartTimestamp() {
+        String topicA = "offsets-a";
+        String topicB = "offsets-b";
+        long baseTs = System.currentTimeMillis();
+        // Produce 20 messages to A before the start timestamp
+        for (int i = 0; i < 20; i++) {
+            byte[] key = new byte[]{(byte)i};
+            byte[] value = new byte[]{(byte)(i+100)};
+            produceTestMessage(kafkaA.getBootstrapServers(), topicA, key, value, baseTs + i * 1000);
+        }
+        // Produce 10 identical messages to both A and B at/after the start timestamp
+        long startTs = baseTs + 20 * 1000;
+        for (int i = 20; i < 30; i++) {
+            byte[] key = new byte[]{(byte)i};
+            byte[] value = new byte[]{(byte)(i+100)};
+            produceTestMessage(kafkaA.getBootstrapServers(), topicA, key, value, baseTs + i * 1000);
+            produceTestMessage(kafkaB.getBootstrapServers(), topicB, key, value, baseTs + i * 1000);
+        }
+        Properties propsA = new Properties();
+        propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
+        propsA.put("group.id", "offsets-a");
+        propsA.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("auto.offset.reset", "earliest");
+        Properties propsB = new Properties();
+        propsB.put("bootstrap.servers", kafkaB.getBootstrapServers());
+        propsB.put("group.id", "offsets-b");
+        propsB.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("auto.offset.reset", "earliest");
+        CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 20, logger, startTs);
+        assert logger.getDifferences().isEmpty() : "Expected no differences when comparing only messages at/after startTimestamp, got " + logger.getDifferences();
+    }
+
+    @Test
+    void testOffsetReportingWithDifferenceAfterStartTimestamp() {
+        String topicA = "offsets-diff-a";
+        String topicB = "offsets-diff-b";
+        long baseTs = System.currentTimeMillis();
+        // Produce 20 messages to A before the start timestamp
+        for (int i = 0; i < 20; i++) {
+            byte[] key = new byte[]{(byte)i};
+            byte[] value = new byte[]{(byte)(i+100)};
+            produceTestMessage(kafkaA.getBootstrapServers(), topicA, key, value, baseTs + i * 1000);
+        }
+        // Produce 10 messages to both A and B at/after the start timestamp, but make one different in B
+        long startTs = baseTs + 20 * 1000;
+        int diffIndex = 5; // introduce a difference at this index
+        for (int i = 20; i < 30; i++) {
+            byte[] key = new byte[]{(byte)i};
+            byte[] valueA = new byte[]{(byte)(i+100)};
+            byte[] valueB = (i == 20 + diffIndex) ? new byte[]{(byte)99} : new byte[]{(byte)(i+100)};
+            if (i != 24)
+                produceTestMessage(kafkaA.getBootstrapServers(), topicA, key, valueA, baseTs + i * 1000);
+            if (i != 25)
+                produceTestMessage(kafkaB.getBootstrapServers(), topicB, key, valueB, baseTs + i * 1000);
+        }
+        Properties propsA = new Properties();
+        propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
+        propsA.put("group.id", "offsets-diff-a");
+        propsA.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("auto.offset.reset", "earliest");
+        Properties propsB = new Properties();
+        propsB.put("bootstrap.servers", kafkaB.getBootstrapServers());
+        propsB.put("group.id", "offsets-diff-b");
+        propsB.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("auto.offset.reset", "earliest");
+        CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 20, logger, startTs);
+        long headerDiffs = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.HEADER_DIFFERENCE).count();
+        long onlyInA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_A).count();
+        long onlyInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_B).count();
+        long missingAtEnd = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.MISSING_AT_END).count();
+        long outOfOrder = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.OUT_OF_ORDER).count();
+        // There should be exactly one difference (value mismatch, so treated as ONLY_IN_A and ONLY_IN_B)
+        long totalDiffs = headerDiffs + onlyInA + onlyInB + missingAtEnd + outOfOrder;
+        if (totalDiffs != 2) {
+            System.out.println("Differences found:");
+            logger.getDifferences().forEach(d -> System.out.println(d));
+        }
+        assert onlyInA == 1 : "Expected 1 ONLY_IN_A for the differing message, got " + onlyInA;
+        assert onlyInB == 1 : "Expected 1 ONLY_IN_B for the differing message, got " + onlyInB;
+        // Check that the offsets correspond to the correct positions (should be offset 25 in both topics)
+        Difference diffA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_A).findFirst().orElse(null);
+        Difference diffB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_B).findFirst().orElse(null);
+        assert diffA != null && diffB != null;
+        long offsetA = diffA.getRecordA() != null ? diffA.getRecordA().offset() : -1;
+        long offsetB = diffB.getRecordB() != null ? diffB.getRecordB().offset() : -1;
+        assert offsetA >= 0 && offsetB >= 0 : "Offsets should be present in the difference records";
+    }
 }
