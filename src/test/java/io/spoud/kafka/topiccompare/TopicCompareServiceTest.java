@@ -559,6 +559,7 @@ public class TopicCompareServiceTest {
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, total, logger);
-        assert logger.getDifferences().isEmpty() : "Expected no differences for out-of-order events, got " + logger.getDifferences();
+        long outOfOrder = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.OUT_OF_ORDER).count();
+        assert outOfOrder == shuffleCount : "Expected " + shuffleCount + " OUT_OF_ORDER, got " + outOfOrder;
     }
 }

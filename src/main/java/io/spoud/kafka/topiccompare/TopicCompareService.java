@@ -18,6 +18,8 @@ public class TopicCompareService {
 
             Set<String> seenA = new HashSet<>();
             Set<String> seenB = new HashSet<>();
+            List<String> orderA = new ArrayList<>();
+            List<String> orderB = new ArrayList<>();
             // Helper to create a unique string from key and value
             java.util.function.BiFunction<byte[], byte[], String> keyHash = (keyBytes, valueBytes) -> {
                 if (keyBytes != null) {
@@ -40,6 +42,7 @@ public class TopicCompareService {
                     } else {
                         seenA.add(key);
                         recordsA.put(key, record);
+                        orderA.add(key);
                     }
                     countA++;
                     if (countA >= maxMessages) break;
@@ -58,6 +61,7 @@ public class TopicCompareService {
                     } else {
                         seenB.add(key);
                         recordsB.put(key, record);
+                        orderB.add(key);
                     }
                     countB++;
                     if (countB >= maxMessages) break;
@@ -82,6 +86,17 @@ public class TopicCompareService {
                     logger.log(new Difference(Difference.Type.ONLY_IN_A, recordsA.get(key), null, key));
                 } else if (!inA && inB) {
                     logger.log(new Difference(Difference.Type.ONLY_IN_B, null, recordsB.get(key), key));
+                }
+            }
+
+            // Out-of-order detection
+            for (String key : allKeys) {
+                if (recordsA.containsKey(key) && recordsB.containsKey(key)) {
+                    int idxA = orderA.indexOf(key);
+                    int idxB = orderB.indexOf(key);
+                    if (idxA != -1 && idxB != -1 && idxA != idxB) {
+                        logger.log(new Difference(Difference.Type.OUT_OF_ORDER, recordsA.get(key), recordsB.get(key), key));
+                    }
                 }
             }
         }

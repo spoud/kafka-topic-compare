@@ -8,7 +8,8 @@ public class Difference {
         ONLY_IN_B,
         DUPLICATE_IN_A,
         DUPLICATE_IN_B,
-        HEADER_DIFFERENCE
+        HEADER_DIFFERENCE,
+        OUT_OF_ORDER
     }
 
     private final Type type;
