@@ -6,12 +6,46 @@ import java.util.*;
 import java.time.Duration;
 
 public class TopicCompareService {
-    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger) {
+    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp) {
         try (KafkaConsumer<byte[], byte[]> consumerA = new KafkaConsumer<>(propsA);
              KafkaConsumer<byte[], byte[]> consumerB = new KafkaConsumer<>(propsB)) {
 
             consumerA.subscribe(Collections.singletonList(topicA));
             consumerB.subscribe(Collections.singletonList(topicB));
+
+            // Seek to startTimestamp if provided
+            if (startTimestamp != null) {
+                consumerA.poll(Duration.ofMillis(100));
+                consumerB.poll(Duration.ofMillis(100));
+                Set<org.apache.kafka.common.TopicPartition> partitionsA = consumerA.assignment();
+                Set<org.apache.kafka.common.TopicPartition> partitionsB = consumerB.assignment();
+                while (partitionsA.isEmpty() || partitionsB.isEmpty()) {
+                    consumerA.poll(Duration.ofMillis(100));
+                    consumerB.poll(Duration.ofMillis(100));
+                    partitionsA = consumerA.assignment();
+                    partitionsB = consumerB.assignment();
+                }
+                Map<org.apache.kafka.common.TopicPartition, Long> timestampMapA = new HashMap<>();
+                for (org.apache.kafka.common.TopicPartition tp : partitionsA) {
+                    timestampMapA.put(tp, startTimestamp);
+                }
+                Map<org.apache.kafka.common.TopicPartition, Long> timestampMapB = new HashMap<>();
+                for (org.apache.kafka.common.TopicPartition tp : partitionsB) {
+                    timestampMapB.put(tp, startTimestamp);
+                }
+                Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.consumer.OffsetAndTimestamp> offsetsA = consumerA.offsetsForTimes(timestampMapA);
+                for (var entry : offsetsA.entrySet()) {
+                    if (entry.getValue() != null) {
+                        consumerA.seek(entry.getKey(), entry.getValue().offset());
+                    }
+                }
+                Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.consumer.OffsetAndTimestamp> offsetsB = consumerB.offsetsForTimes(timestampMapB);
+                for (var entry : offsetsB.entrySet()) {
+                    if (entry.getValue() != null) {
+                        consumerB.seek(entry.getKey(), entry.getValue().offset());
+                    }
+                }
+            }
 
             Map<String, ConsumerRecord<byte[], byte[]>> recordsA = new HashMap<>();
             Map<String, ConsumerRecord<byte[], byte[]>> recordsB = new HashMap<>();
@@ -116,5 +150,10 @@ public class TopicCompareService {
             if (headerA == null || !Arrays.equals(headerB.value(), headerA.value())) return false;
         }
         return true;
+    }
+
+    // Backward compatible method
+    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger) {
+        compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, null);
     }
 }

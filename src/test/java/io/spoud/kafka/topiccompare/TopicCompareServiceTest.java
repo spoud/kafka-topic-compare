@@ -527,13 +527,13 @@ public class TopicCompareServiceTest {
                 byte[] value = new byte[]{(byte)(i % 256)};
                 produceTestMessage(producerB, topicB, key, value, ts + i);
             }
-            // Collect and shuffle the middle 50 events
-            java.util.List<Integer> shuffled = new java.util.ArrayList<>();
+            // Collect and rotate the middle 50 events (guaranteed all out of order)
+            java.util.List<Integer> rotated = new java.util.ArrayList<>();
             for (int i = shuffleStart; i < shuffleStart + shuffleCount; i++) {
-                shuffled.add(i);
+                rotated.add(i);
             }
-            java.util.Collections.shuffle(shuffled);
-            for (int i : shuffled) {
+            java.util.Collections.rotate(rotated, 1); // rotate by 1 to ensure all are out of order
+            for (int i : rotated) {
                 byte[] key = new byte[]{(byte)(i >>> 24), (byte)(i >>> 16), (byte)(i >>> 8), (byte)i};
                 byte[] value = new byte[]{(byte)(i % 256)};
                 produceTestMessage(producerB, topicB, key, value, ts + i);
@@ -561,5 +561,49 @@ public class TopicCompareServiceTest {
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, total, logger);
         long outOfOrder = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.OUT_OF_ORDER).count();
         assert outOfOrder == shuffleCount : "Expected " + shuffleCount + " OUT_OF_ORDER, got " + outOfOrder;
+    }
+
+    @Test
+    void testCompareTopicsWithStartTimestamp() {
+        String topicA = "timestamp-a";
+        String topicB = "timestamp-b";
+        long baseTs = System.currentTimeMillis();
+        int total = 10;
+        Properties prodPropsA = new Properties();
+        prodPropsA.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaA.getBootstrapServers());
+        prodPropsA.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsA.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        Properties prodPropsB = new Properties();
+        prodPropsB.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaB.getBootstrapServers());
+        prodPropsB.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsB.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        try (KafkaProducer<byte[], byte[]> producerA = new KafkaProducer<>(prodPropsA);
+             KafkaProducer<byte[], byte[]> producerB = new KafkaProducer<>(prodPropsB)) {
+            for (int i = 0; i < total; i++) {
+                byte[] key = new byte[]{(byte)i};
+                byte[] value = new byte[]{(byte)(i+100)};
+                long ts = baseTs + i * 1000;
+                produceTestMessage(producerA, topicA, key, value, ts);
+                produceTestMessage(producerB, topicB, key, value, ts);
+            }
+        }
+        // Use a start timestamp that skips the first 5 messages
+        long startTs = baseTs + 5 * 1000;
+        Properties propsA = new Properties();
+        propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
+        propsA.put("group.id", "timestamp-a");
+        propsA.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("auto.offset.reset", "earliest");
+        Properties propsB = new Properties();
+        propsB.put("bootstrap.servers", kafkaB.getBootstrapServers());
+        propsB.put("group.id", "timestamp-b");
+        propsB.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("auto.offset.reset", "earliest");
+        CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, total, logger, startTs);
+        // Only messages with i >= 5 should be compared
+        assert logger.getDifferences().isEmpty() : "Expected no differences for messages at/after start timestamp, got " + logger.getDifferences();
     }
 }

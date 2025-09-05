@@ -96,7 +96,24 @@ public class TopicCompare implements QuarkusApplication {
                     offsetB.isEmpty() ? "null" : offsetB);
             }
         };
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger);
+        String startTimestampIso = getArg(args, "--startTimestamp", null);
+        Long startTimestamp = null;
+        if (startTimestampIso != null) {
+            try {
+                // Try ISO 8601 first
+                java.time.Instant instant = java.time.Instant.parse(startTimestampIso);
+                startTimestamp = instant.toEpochMilli();
+            } catch (Exception isoEx) {
+                try {
+                    // Try epoch millis
+                    startTimestamp = Long.parseLong(startTimestampIso);
+                } catch (Exception millisEx) {
+                    System.err.println("Invalid timestamp for --startTimestamp: " + startTimestampIso + ". Use ISO 8601 or epoch millis.");
+                    System.exit(1);
+                }
+            }
+        }
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp);
         return 0;
     }
 
@@ -127,6 +144,7 @@ public class TopicCompare implements QuarkusApplication {
         System.out.println("  --maxMessages <n>              Maximum number of messages to compare (default: 1000)");
         System.out.println("  --clientPropertiesA <file>     Properties file for cluster A (optional, overrides defaults)");
         System.out.println("  --clientPropertiesB <file>     Properties file for cluster B (optional, overrides defaults)");
+        System.out.println("  --startTimestamp <timestamp>   Start timestamp for message comparison (ISO 8601 format, optional)");
         System.out.println("  --help                         Show this help message and exit");
         System.out.println("  --debug                        Enable debug logging for Kafka");
         System.out.println();
