@@ -2,11 +2,37 @@ package io.spoud.kafka.topiccompare;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.Config;
+import org.apache.kafka.clients.admin.DescribeConfigsResult;
+import org.apache.kafka.common.config.ConfigResource;
+
 import java.util.*;
 import java.time.Duration;
 
 public class TopicCompareService {
     public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp) {
+        boolean compacted = false;
+        try (AdminClient adminA = AdminClient.create(propsA); AdminClient adminB = AdminClient.create(propsB)) {
+            ConfigResource resA = new ConfigResource(ConfigResource.Type.TOPIC, topicA);
+            ConfigResource resB = new ConfigResource(ConfigResource.Type.TOPIC, topicB);
+            DescribeConfigsResult resultA = adminA.describeConfigs(Collections.singleton(resA));
+            DescribeConfigsResult resultB = adminB.describeConfigs(Collections.singleton(resB));
+            Config configA = resultA.all().get().get(resA);
+            Config configB = resultB.all().get().get(resB);
+            String cleanupA = configA.get("cleanup.policy") != null ? configA.get("cleanup.policy").value() : null;
+            String cleanupB = configB.get("cleanup.policy") != null ? configB.get("cleanup.policy").value() : null;
+            if ((cleanupA != null && cleanupA.contains("compact")) || (cleanupB != null && cleanupB.contains("compact"))) {
+                compacted = true;
+            }
+        } catch (Exception e) {
+            // If we can't determine, default to non-compacted
+            compacted = false;
+        }
+        compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted);
+    }
+
+    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted) {
         try (KafkaConsumer<byte[], byte[]> consumerA = new KafkaConsumer<>(propsA);
              KafkaConsumer<byte[], byte[]> consumerB = new KafkaConsumer<>(propsB)) {
 
@@ -54,7 +80,7 @@ public class TopicCompareService {
             Set<String> seenB = new HashSet<>();
             List<String> orderA = new ArrayList<>();
             List<String> orderB = new ArrayList<>();
-            // Helper to create a unique string from key and value
+            // Helper to create a unique string from key only (for compacted) or key+value (for normal)
             java.util.function.BiFunction<byte[], byte[], String> keyHash = (keyBytes, valueBytes) -> {
                 if (keyBytes != null) {
                     return java.util.Base64.getEncoder().encodeToString(keyBytes);
@@ -75,13 +101,20 @@ public class TopicCompareService {
                     break;
                 }
                 for (var record : records) {
-                    String key = keyHash.apply(record.key(), record.value());
-                    if (seenA.contains(key)) {
-                        logger.log(new Difference(Difference.Type.DUPLICATE_IN_A, record, null, key));
-                    } else {
-                        seenA.add(key);
+                    String key = keyHash.apply(record.key(), compacted ? null : record.value());
+                    if (compacted) {
+                        // Always keep the latest for this key
                         recordsA.put(key, record);
-                        orderA.add(key);
+                        if (!seenA.contains(key)) orderA.add(key);
+                        seenA.add(key);
+                    } else {
+                        if (seenA.contains(key)) {
+                            logger.log(new Difference(Difference.Type.DUPLICATE_IN_A, record, null, key));
+                        } else {
+                            seenA.add(key);
+                            recordsA.put(key, record);
+                            orderA.add(key);
+                        }
                     }
                     countA++;
                     if (countA >= maxMessages) break;
@@ -97,13 +130,19 @@ public class TopicCompareService {
                     break;
                 }
                 for (var record : records) {
-                    String key = keyHash.apply(record.key(), record.value());
-                    if (seenB.contains(key)) {
-                        logger.log(new Difference(Difference.Type.DUPLICATE_IN_B, null, record, key));
-                    } else {
-                        seenB.add(key);
+                    String key = keyHash.apply(record.key(), compacted ? null : record.value());
+                    if (compacted) {
                         recordsB.put(key, record);
-                        orderB.add(key);
+                        if (!seenB.contains(key)) orderB.add(key);
+                        seenB.add(key);
+                    } else {
+                        if (seenB.contains(key)) {
+                            logger.log(new Difference(Difference.Type.DUPLICATE_IN_B, null, record, key));
+                        } else {
+                            seenB.add(key);
+                            recordsB.put(key, record);
+                            orderB.add(key);
+                        }
                     }
                     countB++;
                     if (countB >= maxMessages) break;
@@ -158,13 +197,15 @@ public class TopicCompareService {
                 }
             }
 
-            // Out-of-order detection
-            for (String key : allKeys) {
-                if (recordsA.containsKey(key) && recordsB.containsKey(key)) {
-                    int idxA = orderA.indexOf(key);
-                    int idxB = orderB.indexOf(key);
-                    if (idxA != -1 && idxB != -1 && idxA != idxB) {
-                        logger.log(new Difference(Difference.Type.OUT_OF_ORDER, recordsA.get(key), recordsB.get(key), key));
+            if (!compacted) {
+                // Out-of-order detection (not relevant for compacted topics)
+                for (String key : allKeys) {
+                    if (recordsA.containsKey(key) && recordsB.containsKey(key)) {
+                        int idxA = orderA.indexOf(key);
+                        int idxB = orderB.indexOf(key);
+                        if (idxA != -1 && idxB != -1 && idxA != idxB) {
+                            logger.log(new Difference(Difference.Type.OUT_OF_ORDER, recordsA.get(key), recordsB.get(key), key));
+                        }
                     }
                 }
             }

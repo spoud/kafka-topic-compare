@@ -10,6 +10,11 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import java.util.Properties;
 import io.spoud.kafka.topiccompare.TopicCompareService;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.NewTopic;
+import java.util.Collections;
+import java.util.Map;
+import java.util.concurrent.ExecutionException;
 
 public class TopicCompareServiceTest {
     static KafkaContainer kafkaA;
@@ -703,5 +708,86 @@ public class TopicCompareServiceTest {
         long offsetA = diffA.getRecordA() != null ? diffA.getRecordA().offset() : -1;
         long offsetB = diffB.getRecordB() != null ? diffB.getRecordB().offset() : -1;
         assert offsetA >= 0 && offsetB >= 0 : "Offsets should be present in the difference records";
+    }
+
+    /**
+     * Helper to create a topic with custom properties (e.g., compacted topic).
+     */
+    private void createTopicWithProperties(String bootstrapServers, String topic, int partitions, short replication, Map<String, String> configs) {
+        Properties props = new Properties();
+        props.put("bootstrap.servers", bootstrapServers);
+        try (AdminClient admin = AdminClient.create(props)) {
+            NewTopic newTopic = new NewTopic(topic, partitions, replication).configs(configs);
+            admin.createTopics(Collections.singleton(newTopic)).all().get();
+        } catch (InterruptedException | ExecutionException e) {
+            throw new RuntimeException("Failed to create topic: " + topic, e);
+        }
+    }
+
+    @Test
+    void testCompactedTopics() throws Exception {
+        String topicA = "compacted-a";
+        String topicB = "compacted-b";
+        // Create compacted topic on clusterB only
+        createTopicWithProperties(
+            kafkaB.getBootstrapServers(),
+            topicB,
+            1,
+            (short)1,
+            Map.of(
+                "cleanup.policy", "compact",
+                "segment.ms", "100",
+                "min.cleanable.dirty.ratio", "0.01",
+                "delete.retention.ms", "100"
+            )
+        );
+        // Give Kafka a moment to create the topic
+        Thread.sleep(500);
+        // Produce messages with duplicate keys
+        // Key 1: value 10, then 20 (should compact to 20)
+        // Key 2: value 30 (should remain)
+        byte[] key1 = new byte[]{1};
+        byte[] key2 = new byte[]{2};
+        byte[] key3 = new byte[]{2};
+        byte[] value10 = new byte[]{10};
+        byte[] value20 = new byte[]{20};
+        byte[] value30 = new byte[]{30};
+        long ts = System.currentTimeMillis();
+        // Both clusters get same final state
+        produceTestMessage(kafkaA.getBootstrapServers(), topicA, key1, value10, ts);
+        produceTestMessage(kafkaA.getBootstrapServers(), topicA, key1, value20, ts+1);
+        produceTestMessage(kafkaA.getBootstrapServers(), topicA, key2, value30, ts+2);
+        produceTestMessage(kafkaB.getBootstrapServers(), topicB, key1, value10, ts);
+        produceTestMessage(kafkaB.getBootstrapServers(), topicB, key1, value20, ts+1);
+        produceTestMessage(kafkaB.getBootstrapServers(), topicB, key2, value30, ts+2);
+        // Wait for compaction to run on clusterB
+        Thread.sleep(2000);
+        Properties propsA = new Properties();
+        propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
+        propsA.put("group.id", "compacted-a");
+        propsA.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("auto.offset.reset", "earliest");
+        Properties propsB = new Properties();
+        propsB.put("bootstrap.servers", kafkaB.getBootstrapServers());
+        propsB.put("group.id", "compacted-b");
+        propsB.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("auto.offset.reset", "earliest");
+        CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        assert logger.getDifferences().isEmpty() : "Expected no differences after compaction, got " + logger.getDifferences();
+
+        // Now, produce a different value for key1 in clusterA only
+        produceTestMessage(kafkaA.getBootstrapServers(), topicA, key1, new byte[]{99}, ts+3);
+        // add a message on bosth so it's not marked as missing on the end of topic
+        produceTestMessage(kafkaA.getBootstrapServers(), topicA, key3, new byte[]{99}, ts+3);
+        produceTestMessage(kafkaB.getBootstrapServers(), topicB, key3, new byte[]{99}, ts+3);
+
+        Thread.sleep(500);
+        logger = new CollectingDifferenceLogger();
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        boolean found = logger.getDifferences().stream().anyMatch(d -> d.getType() == Difference.Type.ONLY_IN_A);
+        assert found : "Expected a difference for key1 (ONLY_IN_A) after diverging value, got " + logger.getDifferences();
     }
 }
