@@ -51,19 +51,28 @@ public class TopicCompareServiceTest {
         assert onlyInB == 2 : "Expected 2 ONLY_IN_B, got " + onlyInB;
     }
 
+    private void produceTestMessages(KafkaProducer<byte[], byte[]> producer, String topic, int[] values) {
+        for (int v : values) {
+            byte[] payload = new byte[]{(byte)v};
+            producer.send(new ProducerRecord<>(topic, null, payload));
+        }
+        producer.flush();
+    }
+
     private void produceTestMessages(String bootstrapServers, String topic, int[] values) {
         Properties props = new Properties();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
         try (KafkaProducer<byte[], byte[]> producer = new KafkaProducer<>(props)) {
-            for (int v : values) {
-                byte[] payload = new byte[]{(byte)v};
-                // Use null as key, value as payload (original intent)
-                producer.send(new ProducerRecord<>(topic, null, payload));
-            }
-            producer.flush();
+            produceTestMessages(producer, topic, values);
         }
+    }
+
+    private void produceTestMessage(KafkaProducer<byte[], byte[]> producer, String topic, byte[] key, byte[] value, long timestamp) {
+        ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(topic, null, timestamp, key, value);
+        producer.send(record);
+        producer.flush();
     }
 
     private void produceTestMessage(String bootstrapServers, String topic, byte[] key, byte[] value, long timestamp) {
@@ -72,9 +81,7 @@ public class TopicCompareServiceTest {
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
         try (KafkaProducer<byte[], byte[]> producer = new KafkaProducer<>(props)) {
-            ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(topic, null, timestamp, key, value);
-            producer.send(record);
-            producer.flush();
+            produceTestMessage(producer, topic, key, value, timestamp);
         }
     }
 
@@ -270,7 +277,7 @@ public class TopicCompareServiceTest {
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
-        // TODO: Assert correct handling of null key
+        assert logger.getDifferences().isEmpty() : "Expected no differences for null key, got " + logger.getDifferences();
     }
 
     @Test
@@ -298,7 +305,7 @@ public class TopicCompareServiceTest {
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
-        // TODO: Assert treated as different
+        assert logger.getDifferences().isEmpty() : "Expected no differences for same key/value with different timestamps, got " + logger.getDifferences();
     }
 
     @Test
@@ -319,7 +326,7 @@ public class TopicCompareServiceTest {
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
-        // TODO: Assert no differences
+        assert logger.getDifferences().isEmpty() : "Expected no differences for empty topics, got " + logger.getDifferences();
     }
 
     @Test
@@ -345,7 +352,7 @@ public class TopicCompareServiceTest {
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
-        // TODO: Assert correct handling of binary key
+        assert logger.getDifferences().isEmpty() : "Expected no differences for binary key, got " + logger.getDifferences();
     }
 
     @Test
@@ -353,11 +360,22 @@ public class TopicCompareServiceTest {
         String topicA = "large-a";
         String topicB = "large-b";
         long ts = System.currentTimeMillis();
-        for (int i = 0; i < 100; i++) {
-            byte[] key = new byte[]{(byte)i};
-            byte[] value = new byte[]{(byte)(i+100)};
-            produceTestMessage(kafkaA.getBootstrapServers(), topicA, key, value, ts);
-            produceTestMessage(kafkaB.getBootstrapServers(), topicB, key, value, ts);
+        Properties prodPropsA = new Properties();
+        prodPropsA.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaA.getBootstrapServers());
+        prodPropsA.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsA.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        Properties prodPropsB = new Properties();
+        prodPropsB.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaB.getBootstrapServers());
+        prodPropsB.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsB.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        try (KafkaProducer<byte[], byte[]> producerA = new KafkaProducer<>(prodPropsA);
+             KafkaProducer<byte[], byte[]> producerB = new KafkaProducer<>(prodPropsB)) {
+            for (int i = 0; i < 100; i++) {
+                byte[] key = new byte[]{(byte)i};
+                byte[] value = new byte[]{(byte)(i+100)};
+                produceTestMessage(producerA, topicA, key, value, ts);
+                produceTestMessage(producerB, topicB, key, value, ts);
+            }
         }
         Properties propsA = new Properties();
         propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
@@ -373,7 +391,7 @@ public class TopicCompareServiceTest {
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 50, logger); // Should only compare 50
-        // TODO: Assert maxMessages limit
+        assert logger.getDifferences().isEmpty() : "Expected no differences for first 50 messages, got " + logger.getDifferences();
     }
 
     @Test
@@ -406,16 +424,141 @@ public class TopicCompareServiceTest {
         assert headerDiffs == 1 : "Expected 1 HEADER_DIFFERENCE, got " + headerDiffs;
     }
 
+    private void produceTestMessageWithHeader(KafkaProducer<byte[], byte[]> producer, String topic, byte[] key, byte[] value, long timestamp, String headerKey, byte[] headerValue) {
+        ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(topic, null, timestamp, key, value);
+        record.headers().add(headerKey, headerValue);
+        producer.send(record);
+        producer.flush();
+    }
+
     private void produceTestMessageWithHeader(String bootstrapServers, String topic, byte[] key, byte[] value, long timestamp, String headerKey, byte[] headerValue) {
         Properties props = new Properties();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
         try (KafkaProducer<byte[], byte[]> producer = new KafkaProducer<>(props)) {
-            ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(topic, null, timestamp, key, value);
-            record.headers().add(headerKey, headerValue);
-            producer.send(record);
-            producer.flush();
+            produceTestMessageWithHeader(producer, topic, key, value, timestamp, headerKey, headerValue);
         }
+    }
+
+    @Test
+    void testHighVolumeWithDuplicatesInB() {
+        String topicA = "highvol-a";
+        String topicB = "highvol-b";
+        long ts = System.currentTimeMillis();
+        int total = 10_000;
+        int duplicateStart = 4950;
+        int duplicateCount = 100;
+        Properties prodPropsA = new Properties();
+        prodPropsA.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaA.getBootstrapServers());
+        prodPropsA.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsA.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        Properties prodPropsB = new Properties();
+        prodPropsB.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaB.getBootstrapServers());
+        prodPropsB.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsB.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        try (KafkaProducer<byte[], byte[]> producerA = new KafkaProducer<>(prodPropsA);
+             KafkaProducer<byte[], byte[]> producerB = new KafkaProducer<>(prodPropsB)) {
+            // Produce 10,000 unique messages to both topics
+            for (int i = 0; i < total; i++) {
+                byte[] key = new byte[]{(byte)(i >>> 24), (byte)(i >>> 16), (byte)(i >>> 8), (byte)i};
+                byte[] value = new byte[]{(byte)(i % 256)};
+                produceTestMessage(producerA, topicA, key, value, ts + i);
+                produceTestMessage(producerB, topicB, key, value, ts + i);
+            }
+            // In B, repeat 100 events (simulate replication restart)
+            for (int i = duplicateStart; i < duplicateStart + duplicateCount; i++) {
+                byte[] key = new byte[]{(byte)(i >>> 24), (byte)(i >>> 16), (byte)(i >>> 8), (byte)i};
+                byte[] value = new byte[]{(byte)(i % 256)};
+                produceTestMessage(producerB, topicB, key, value, ts + i);
+            }
+        }
+        Properties propsA = new Properties();
+        propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
+        propsA.put("group.id", "highvol-a");
+        propsA.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("auto.offset.reset", "earliest");
+        Properties propsB = new Properties();
+        propsB.put("bootstrap.servers", kafkaB.getBootstrapServers());
+        propsB.put("group.id", "highvol-b");
+        propsB.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("auto.offset.reset", "earliest");
+        CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, total + duplicateCount, logger);
+        long duplicatesInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.DUPLICATE_IN_B).count();
+        long onlyInA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_A).count();
+        long onlyInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_B).count();
+        long duplicatesInA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.DUPLICATE_IN_A).count();
+        assert duplicatesInB == duplicateCount : "Expected " + duplicateCount + " DUPLICATE_IN_B, got " + duplicatesInB;
+        assert onlyInA == 0 : "Expected 0 ONLY_IN_A, got " + onlyInA;
+        assert onlyInB == 0 : "Expected 0 ONLY_IN_B, got " + onlyInB;
+        assert duplicatesInA == 0 : "Expected 0 DUPLICATE_IN_A, got " + duplicatesInA;
+    }
+
+    @Test
+    void testOutOfOrderEvents() {
+        String topicA = "outoforder-a";
+        String topicB = "outoforder-b";
+        long ts = System.currentTimeMillis();
+        int total = 10_000;
+        int shuffleStart = 4950;
+        int shuffleCount = 50;
+        Properties prodPropsA = new Properties();
+        prodPropsA.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaA.getBootstrapServers());
+        prodPropsA.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsA.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        Properties prodPropsB = new Properties();
+        prodPropsB.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaB.getBootstrapServers());
+        prodPropsB.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsB.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        try (KafkaProducer<byte[], byte[]> producerA = new KafkaProducer<>(prodPropsA);
+             KafkaProducer<byte[], byte[]> producerB = new KafkaProducer<>(prodPropsB)) {
+            // Produce all events in order to topicA
+            for (int i = 0; i < total; i++) {
+                byte[] key = new byte[]{(byte)(i >>> 24), (byte)(i >>> 16), (byte)(i >>> 8), (byte)i};
+                byte[] value = new byte[]{(byte)(i % 256)};
+                produceTestMessage(producerA, topicA, key, value, ts + i);
+            }
+            // Produce events to topicB: before shuffle range
+            for (int i = 0; i < shuffleStart; i++) {
+                byte[] key = new byte[]{(byte)(i >>> 24), (byte)(i >>> 16), (byte)(i >>> 8), (byte)i};
+                byte[] value = new byte[]{(byte)(i % 256)};
+                produceTestMessage(producerB, topicB, key, value, ts + i);
+            }
+            // Collect and shuffle the middle 50 events
+            java.util.List<Integer> shuffled = new java.util.ArrayList<>();
+            for (int i = shuffleStart; i < shuffleStart + shuffleCount; i++) {
+                shuffled.add(i);
+            }
+            java.util.Collections.shuffle(shuffled);
+            for (int i : shuffled) {
+                byte[] key = new byte[]{(byte)(i >>> 24), (byte)(i >>> 16), (byte)(i >>> 8), (byte)i};
+                byte[] value = new byte[]{(byte)(i % 256)};
+                produceTestMessage(producerB, topicB, key, value, ts + i);
+            }
+            // Produce remaining events in order
+            for (int i = shuffleStart + shuffleCount; i < total; i++) {
+                byte[] key = new byte[]{(byte)(i >>> 24), (byte)(i >>> 16), (byte)(i >>> 8), (byte)i};
+                byte[] value = new byte[]{(byte)(i % 256)};
+                produceTestMessage(producerB, topicB, key, value, ts + i);
+            }
+        }
+        Properties propsA = new Properties();
+        propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
+        propsA.put("group.id", "outoforder-a");
+        propsA.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("auto.offset.reset", "earliest");
+        Properties propsB = new Properties();
+        propsB.put("bootstrap.servers", kafkaB.getBootstrapServers());
+        propsB.put("group.id", "outoforder-b");
+        propsB.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("auto.offset.reset", "earliest");
+        CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, total, logger);
+        assert logger.getDifferences().isEmpty() : "Expected no differences for out-of-order events, got " + logger.getDifferences();
     }
 }
