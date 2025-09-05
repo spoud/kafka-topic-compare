@@ -1,13 +1,35 @@
 # kafka-topic-compare
 
-kafka-topic-compare is a tool for comparing two Kafka topics. It detects differences in messages, including keys, values, and headers. It reports:
-- Messages only in topic A or B
-- Duplicate messages in either topic
-- Messages with the same key and value but different headers
+A powerful tool for comparing two Kafka topics, designed for developers and operators who need to verify data consistency between Kafka clusters or topics.
 
-## CLI Usage
+## Features
+- Compares two Kafka topics for differences in messages, keys, values, and headers
+- Detects:
+  - Messages only in topic A or B
+  - Duplicate messages in either topic
+  - Messages with the same key and value but different headers
+  - Out-of-order messages
+- CLI tool, easy to run locally or in CI/CD
+- Supports large topics and configurable message limits
+- Automated tests and dependency updates via GitHub Actions and Dependabot
 
-After building the project, you can run the comparison from the command line:
+## Installation
+
+**Requirements:**
+- Java 17 or newer
+- Maven (or use the included `mvnw` wrapper)
+
+Clone the repository and build the project:
+
+```sh
+./mvnw clean package
+```
+
+The built JAR will be in `target/quarkus-app/quarkus-run.jar`.
+
+## Usage
+
+Run the comparison tool from the command line:
 
 ```sh
 java -jar target/quarkus-app/quarkus-run.jar \
@@ -17,69 +39,97 @@ java -jar target/quarkus-app/quarkus-run.jar \
 ```
 
 ### Arguments
-- `--bootstrapA` Kafka bootstrap servers for topic A
-- `--topicA` Name of topic A
-- `--bootstrapB` Kafka bootstrap servers for topic B
-- `--topicB` Name of topic B
-- `--maxMessages` Maximum number of messages to compare from each topic
+- `--bootstrapA` Kafka bootstrap servers for topic A (default: `localhost:9092`)
+- `--topicA` Name of topic A (default: `topicA`)
+- `--bootstrapB` Kafka bootstrap servers for topic B (default: `localhost:9093`)
+- `--topicB` Name of topic B (default: `topicB`)
+- `--maxMessages` Maximum number of messages to compare from each topic (default: `1000`)
+- `--clientPropertiesA` (optional) Path to a Java properties file for topic A consumer configuration
+- `--clientPropertiesB` (optional) Path to a Java properties file for topic B consumer configuration
+- `--output` or `-o` Output format: `csv` (default) or `json`
+- `--startTimestamp` (optional) Only compare messages with timestamp >= this ISO-8601 value or epoch milliseconds
+- `--debug` Enable debug logging
+- `--help` Show help and exit
+
+> For advanced Kafka consumer settings (e.g., group.id, deserializers), use `--clientPropertiesA` and `--clientPropertiesB` to provide a properties file. CLI arguments take precedence over properties file values.
 
 ### Example Output
+#### CSV (default)
 ```
-ONLY_IN_A: key=null value=foo
-ONLY_IN_B: key=null value=bar
-DUPLICATE_IN_A: key=abc value=xyz
-HEADER_DIFFERENCE: key=abc value=xyz headersA={foo=bar} headersB={foo=baz}
+type,bootstrapA,topicA,partitionA,offsetA,bootstrapB,topicB,partitionB,offsetB
+ONLY_IN_A,localhost:9092,topicA,0,10,localhost:9093,topicB,,
+ONLY_IN_B,localhost:9092,topicA,,,localhost:9093,topicB,1,15
+HEADER_DIFFERENCE,localhost:9092,topicA,0,12,localhost:9093,topicB,1,17
+```
+#### JSON
+```
+{"type":"ONLY_IN_A","bootstrapA":"localhost:9092","topicA":"topicA","partitionA":0,"offsetA":10,"bootstrapB":"localhost:9093","topicB":"topicB","partitionB":null,"offsetB":null}
+{"type":"ONLY_IN_B","bootstrapA":"localhost:9092","topicA":"topicA","partitionA":null,"offsetA":null,"bootstrapB":"localhost:9093","topicB":"topicB","partitionB":1,"offsetB":15}
+{"type":"HEADER_DIFFERENCE","bootstrapA":"localhost:9092","topicA":"topicA","partitionA":0,"offsetA":12,"bootstrapB":"localhost:9093","topicB":"topicB","partitionB":1,"offsetB":17}
 ```
 
-## Running the application in dev mode
+## Running Tests
 
-You can run your application in dev mode that enables live coding using:
+To run all tests:
+```sh
+./mvnw test
+```
 
-```shell script
+## Running in Development Mode
+
+You can run your application in dev mode with live coding using:
+```sh
 ./mvnw quarkus:dev
 ```
 
-> **_NOTE:_**  Quarkus now ships with a Dev UI, which is available in dev mode only at <http://localhost:8080/q/dev/>.
+Dev UI is available at <http://localhost:8080/q/dev/> in dev mode.
 
-## Packaging and running the application
+## Packaging and Running
 
-The application can be packaged using:
-
-```shell script
+To build the application:
+```sh
 ./mvnw package
 ```
 
-It produces the `quarkus-run.jar` file in the `target/quarkus-app/` directory.
-Be aware that it’s not an _über-jar_ as the dependencies are copied into the `target/quarkus-app/lib/` directory.
+The application is runnable using:
+```sh
+java -jar target/quarkus-app/quarkus-run.jar
+```
 
-The application is now runnable using `java -jar target/quarkus-app/quarkus-run.jar`.
-
-If you want to build an _über-jar_, execute the following command:
-
-```shell script
+If you want to build an _über-jar_:
+```sh
 ./mvnw package -Dquarkus.package.jar.type=uber-jar
 ```
 
-The application, packaged as an _über-jar_, is now runnable using `java -jar target/*-runner.jar`.
-
-## Creating a native executable
-
-You can create a native executable using:
-
-```shell script
-./mvnw package -Dnative
+Run with:
+```sh
+java -jar target/*-runner.jar
 ```
 
-Or, if you don't have GraalVM installed, you can run the native executable build in a container using:
+## Building a Native Executable
 
-```shell script
+With GraalVM installed:
+```sh
+./mvnw package -Dnative
+```
+Or using a container:
+```sh
 ./mvnw package -Dnative -Dquarkus.native.container-build=true
 ```
 
-You can then execute your native executable with: `./target/kafka-topic-compare-1.0-SNAPSHOT-runner`
+Run the native executable:
+```sh
+./target/kafka-topic-compare-1.0-SNAPSHOT-runner
+```
 
-If you want to learn more about building native executables, please consult <https://quarkus.io/guides/maven-tooling>.
+## CI/CD and Dependency Management
+- **CI:** All pull requests are automatically tested via GitHub Actions.
+- **Release:** JARs are built and attached to releases when a tag is pushed to the `main` branch.
+- **Dependabot:** Keeps Maven and Docker dependencies up to date, grouping updates for easier review.
 
 ## Related Guides
+- [Apache Kafka Client](https://quarkus.io/guides/kafka): Connect to Apache Kafka with its native API
 
-- Apache Kafka Client ([guide](https://quarkus.io/guides/kafka)): Connect to Apache Kafka with its native API
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.

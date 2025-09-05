@@ -144,7 +144,7 @@ public class TopicCompare implements QuarkusApplication {
         System.out.println("  --maxMessages <n>              Maximum number of messages to compare (default: 1000)");
         System.out.println("  --clientPropertiesA <file>     Properties file for cluster A (optional, overrides defaults)");
         System.out.println("  --clientPropertiesB <file>     Properties file for cluster B (optional, overrides defaults)");
-        System.out.println("  --startTimestamp <timestamp>   Start timestamp for message comparison (ISO 8601 format, optional)");
+        System.out.println("  --startTimestamp <timestamp>   Start timestamp for message comparison (ISO 8601 format or epoch milliseconds, optional)");
         System.out.println("  --help                         Show this help message and exit");
         System.out.println("  --debug                        Enable debug logging for Kafka");
         System.out.println();

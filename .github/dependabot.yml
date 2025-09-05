@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+    groups:
+      maven-dependencies:
+        patterns:
+          - "*"
+  - package-ecosystem: "docker"
+    directory: "/src/main/docker/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+    groups:
+      docker-dependencies:
+        patterns:
+          - "*"
+
