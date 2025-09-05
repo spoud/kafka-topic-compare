@@ -22,6 +22,14 @@ public class TopicCompare implements QuarkusApplication {
         String clientPropsAPath = getArg(args, "--clientPropertiesA", null);
         String clientPropsBPath = getArg(args, "--clientPropertiesB", null);
 
+        String outputFormat = getArg(args, "-o", getArg(args, "--output", "csv")).toLowerCase();
+        boolean isCsv = outputFormat.equals("csv");
+        boolean isJson = outputFormat.equals("json");
+        if (!isCsv && !isJson) {
+            System.err.println("Invalid output format: " + outputFormat + ". Use 'csv' or 'json'.");
+            System.exit(1);
+        }
+
         boolean debug = hasArg(args, "--debug");
         configureKafkaLogging(debug);
 
@@ -57,19 +65,35 @@ public class TopicCompare implements QuarkusApplication {
         propsB.putIfAbsent("auto.offset.reset", "earliest");
         propsB.put("enable.auto.commit", "false");
 
-        System.out.println("--- kafka-topic-compare configuration ---");
-        System.out.println("Topic A: " + topicA + ", Bootstrap: " + propsA.getProperty("bootstrap.servers") + ", Properties: " + (clientPropsAPath != null ? clientPropsAPath : "(default)"));
-        System.out.println("Topic B: " + topicB + ", Bootstrap: " + propsB.getProperty("bootstrap.servers") + ", Properties: " + (clientPropsBPath != null ? clientPropsBPath : "(default)"));
-        System.out.println("Max messages: " + maxMessages);
-        System.out.println("----------------------------------------");
-
+        System.err.println("--- kafka-topic-compare configuration ---");
+        System.err.println("Topic A: " + topicA + ", Bootstrap: " + propsA.getProperty("bootstrap.servers") + ", Properties: " + (clientPropsAPath != null ? clientPropsAPath : "(default)"));
+        System.err.println("Topic B: " + topicB + ", Bootstrap: " + propsB.getProperty("bootstrap.servers") + ", Properties: " + (clientPropsBPath != null ? clientPropsBPath : "(default)"));
+        System.err.println("Max messages: " + maxMessages);
+        System.err.println("----------------------------------------");
+        if (isCsv) {
+            System.out.println("type,bootstrapA,topicA,partitionA,offsetA,bootstrapB,topicB,partitionB,offsetB");
+        }
         DifferenceLogger logger = diff -> {
-            switch (diff.getType()) {
-                case ONLY_IN_A -> System.out.println("Only in A: " + diff.getKeyHash());
-                case ONLY_IN_B -> System.out.println("Only in B: " + diff.getKeyHash());
-                case DUPLICATE_IN_A -> System.out.println("Duplicate in A: " + diff.getKeyHash());
-                case DUPLICATE_IN_B -> System.out.println("Duplicate in B: " + diff.getKeyHash());
-                case HEADER_DIFFERENCE -> System.out.println("Header difference: " + diff.getKeyHash());
+            String type = diff.getType().name();
+            String bootstrapAVal = propsA.getProperty("bootstrap.servers", "");
+            String bootstrapBVal = propsB.getProperty("bootstrap.servers", "");
+            String topicAVal = diff.getRecordA() != null ? diff.getRecordA().topic() : "";
+            String topicBVal = diff.getRecordB() != null ? diff.getRecordB().topic() : "";
+            String partitionA = diff.getRecordA() != null ? String.valueOf(diff.getRecordA().partition()) : "";
+            String partitionB = diff.getRecordB() != null ? String.valueOf(diff.getRecordB().partition()) : "";
+            String offsetA = diff.getRecordA() != null ? String.valueOf(diff.getRecordA().offset()) : "";
+            String offsetB = diff.getRecordB() != null ? String.valueOf(diff.getRecordB().offset()) : "";
+            if (isCsv) {
+                System.out.printf("%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+                    type, bootstrapAVal, topicAVal, partitionA, offsetA, bootstrapBVal, topicBVal, partitionB, offsetB);
+            } else {
+                System.out.printf("{\"type\":\"%s\",\"bootstrapA\":\"%s\",\"topicA\":\"%s\",\"partitionA\":%s,\"offsetA\":%s,\"bootstrapB\":\"%s\",\"topicB\":\"%s\",\"partitionB\":%s,\"offsetB\":%s}\n",
+                    type, escapeJson(bootstrapAVal), escapeJson(topicAVal),
+                    partitionA.isEmpty() ? "null" : partitionA,
+                    offsetA.isEmpty() ? "null" : offsetA,
+                    escapeJson(bootstrapBVal), escapeJson(topicBVal),
+                    partitionB.isEmpty() ? "null" : partitionB,
+                    offsetB.isEmpty() ? "null" : offsetB);
             }
         };
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger);
@@ -110,6 +134,18 @@ public class TopicCompare implements QuarkusApplication {
         System.out.println("  java -jar kafka-topic-compare.jar --bootstrapA localhost:9092 --topicA topicA --bootstrapB localhost:9093 --topicB topicB --maxMessages 100");
     }
 
+    private static class ErrStreamHandler extends java.util.logging.StreamHandler {
+        public ErrStreamHandler() {
+            super(System.err, new java.util.logging.SimpleFormatter());
+            setLevel(java.util.logging.Level.ALL);
+        }
+        @Override
+        public synchronized void publish(java.util.logging.LogRecord record) {
+            super.publish(record);
+            flush();
+        }
+    }
+
     private static void configureKafkaLogging(boolean debug) {
         // Try SLF4J (Logback/Log4j) via reflection, avoid compile-time dependency
         try {
@@ -121,17 +157,48 @@ public class TopicCompare implements QuarkusApplication {
                 kafkaLogger.getClass().getMethod("setLevel", levelClass).invoke(kafkaLogger, level);
                 org.slf4j.Logger kafkaClientsLogger = org.slf4j.LoggerFactory.getLogger("org.apache.kafka.clients");
                 kafkaClientsLogger.getClass().getMethod("setLevel", levelClass).invoke(kafkaClientsLogger, level);
-                System.out.println("Kafka logging set to " + (debug ? "DEBUG" : "WARN") + " (SLF4J/Logback)");
+                // Redirect root appender to stderr
+                Class<?> loggerContextClass = Class.forName("ch.qos.logback.classic.LoggerContext");
+                Object loggerContext = Class.forName("org.slf4j.LoggerFactory").getMethod("getILoggerFactory").invoke(null);
+                Class<?> appenderClass = Class.forName("ch.qos.logback.core.ConsoleAppender");
+                Class<?> encoderClass = Class.forName("ch.qos.logback.classic.encoder.PatternLayoutEncoder");
+                Object appender = appenderClass.getConstructor().newInstance();
+                Object encoder = encoderClass.getConstructor().newInstance();
+                encoderClass.getMethod("setContext", loggerContextClass).invoke(encoder, loggerContext);
+                encoderClass.getMethod("setPattern", String.class).invoke(encoder, "%d{yyyy-MM-dd HH:mm:ss} %-5level %logger{36} - %msg%n");
+                encoderClass.getMethod("start").invoke(encoder);
+                appenderClass.getMethod("setContext", loggerContextClass).invoke(appender, loggerContext);
+                appenderClass.getMethod("setEncoder", encoderClass).invoke(appender, encoder);
+                appenderClass.getMethod("setTarget", String.class).invoke(appender, "System.err");
+                appenderClass.getMethod("start").invoke(appender);
+                Object rootLogger = loggerContextClass.getMethod("getLogger", String.class).invoke(loggerContext, "ROOT");
+                rootLogger.getClass().getMethod("detachAndStopAllAppenders").invoke(rootLogger);
+                rootLogger.getClass().getMethod("addAppender", Class.forName("ch.qos.logback.core.Appender")).invoke(rootLogger, appender);
+                System.err.println("Kafka logging set to " + (debug ? "DEBUG" : "WARN") + " (SLF4J/Logback, redirected to stderr)");
                 return;
             }
         } catch (Throwable ignored) {}
-        // Fallback: java.util.logging
         try {
+            java.util.logging.Logger.getLogger("io.quarkus").setLevel(debug ? java.util.logging.Level.FINE : java.util.logging.Level.WARNING);
             java.util.logging.Logger.getLogger("org.apache.kafka").setLevel(debug ? java.util.logging.Level.FINE : java.util.logging.Level.WARNING);
             java.util.logging.Logger.getLogger("org.apache.kafka.clients").setLevel(debug ? java.util.logging.Level.FINE : java.util.logging.Level.WARNING);
-            System.out.println("Kafka logging set to " + (debug ? "FINE" : "WARNING") + " (java.util.logging)");
+            java.util.logging.Logger rootLogger = java.util.logging.Logger.getLogger("");
+            java.util.logging.Handler[] handlers = rootLogger.getHandlers();
+            for (java.util.logging.Handler handler : handlers) {
+                if (handler instanceof java.util.logging.ConsoleHandler) {
+                    rootLogger.removeHandler(handler);
+                }
+            }
+            rootLogger.addHandler(new ErrStreamHandler());
+        } catch (Throwable t) {
+            System.err.println("Kafka logging: could not set log level or redirect to stderr (java.util.logging): " + t);
+            t.printStackTrace(System.err);
             return;
-        } catch (Throwable ignored) {}
-        System.out.println("Kafka logging: could not set log level (no supported backend found)");
+        }
+        System.err.println("Kafka logging set to " + (debug ? "FINE" : "WARNING") + " (java.util.logging, redirected to stderr)");
+    }
+
+    private static String escapeJson(String s) {
+        return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }
