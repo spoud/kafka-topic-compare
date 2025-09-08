@@ -125,6 +125,30 @@ public class TopicCompare implements QuarkusApplication {
                 String valueA = diff.getRecordA() != null && diff.getRecordA().value() != null ? java.util.Base64.getEncoder().encodeToString(diff.getRecordA().value()) : "";
                 String valueB = diff.getRecordB() != null && diff.getRecordB().value() != null ? java.util.Base64.getEncoder().encodeToString(diff.getRecordB().value()) : "";
                 System.err.println(indent + "value:  " + valueA + " <-> " + valueB);
+
+                if(diff.getType() == Difference.Type.DUPLICATE_IN_A && diff.getDuplicateRecord() != null) {
+                    String dupOffset = String.valueOf(diff.getDuplicateRecord().offset());
+                    String dupTimestamp = String.valueOf(diff.getDuplicateRecord().timestamp());
+                    String dupHeaders = headersToString(diff.getDuplicateRecord().headers(), isCsv);
+                    String dupKey = diff.getDuplicateRecord().key() != null ? java.util.Base64.getEncoder().encodeToString(diff.getDuplicateRecord().key()) : "";
+                    String dupValue = diff.getDuplicateRecord().value() != null ? java.util.Base64.getEncoder().encodeToString(diff.getDuplicateRecord().value()) : "";
+                    System.err.println(indent + "Duplicate in A at offset " + dupOffset + ":");
+                    System.err.println(indent + "    timestamp: " + dupTimestamp);
+                    System.err.println(indent + "    headers: " + dupHeaders);
+                    System.err.println(indent + "    key:     " + dupKey);
+                    System.err.println(indent + "    value:   " + dupValue);
+                } else if (diff.getType() == Difference.Type.DUPLICATE_IN_B && diff.getDuplicateRecord() != null) {
+                    String dupOffset = String.valueOf(diff.getDuplicateRecord().offset());
+                    String dupTimestamp = String.valueOf(diff.getDuplicateRecord().timestamp());
+                    String dupHeaders = headersToString(diff.getDuplicateRecord().headers(), isCsv);
+                    String dupKey = diff.getDuplicateRecord().key() != null ? java.util.Base64.getEncoder().encodeToString(diff.getDuplicateRecord().key()) : "";
+                    String dupValue = diff.getDuplicateRecord().value() != null ? java.util.Base64.getEncoder().encodeToString(diff.getDuplicateRecord().value()) : "";
+                    System.err.println(indent + "Duplicate in B at offset " + dupOffset + ":");
+                    System.err.println(indent + "    timestamp: " + dupTimestamp);
+                    System.err.println(indent + "    headers: " + dupHeaders);
+                    System.err.println(indent + "    key:     " + dupKey);
+                    System.err.println(indent + "    value:   " + dupValue);
+                }
             }
             if (diff.getRecordA() != null) {
                 int part = diff.getRecordA().partition();

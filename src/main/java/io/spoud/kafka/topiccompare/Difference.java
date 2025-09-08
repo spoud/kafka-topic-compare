@@ -16,18 +16,25 @@ public class Difference {
     private final Type type;
     private final ConsumerRecord<byte[], byte[]> recordA;
     private final ConsumerRecord<byte[], byte[]> recordB;
+    private final ConsumerRecord<byte[], byte[]> duplicateRecord;
     private final String keyHash;
 
     public Difference(Type type, ConsumerRecord<byte[], byte[]> recordA, ConsumerRecord<byte[], byte[]> recordB, String keyHash) {
+        this(type, recordA, recordB, keyHash, null);
+    }
+
+    public Difference(Type type, ConsumerRecord<byte[], byte[]> recordA, ConsumerRecord<byte[], byte[]> recordB, String keyHash, ConsumerRecord<byte[], byte[]> duplicateRecord) {
         this.type = type;
         this.recordA = recordA;
         this.recordB = recordB;
         this.keyHash = keyHash;
+        this.duplicateRecord = duplicateRecord;
     }
 
     public Type getType() { return type; }
     public ConsumerRecord<byte[], byte[]> getRecordA() { return recordA; }
     public ConsumerRecord<byte[], byte[]> getRecordB() { return recordB; }
+    public ConsumerRecord<byte[], byte[]> getDuplicateRecord() { return duplicateRecord; }
     public String getKeyHash() { return keyHash; }
 
     @Override
@@ -40,6 +47,9 @@ public class Difference {
         }
         if (recordB != null) {
             sb.append(", B: value=").append(recordB.value() != null ? java.util.Arrays.toString(recordB.value()) : "null");
+        }
+        if (duplicateRecord != null) {
+            sb.append(", Duplicate: value=").append(duplicateRecord.value() != null ? java.util.Arrays.toString(duplicateRecord.value()) : "null");
         }
         return sb.toString();
     }

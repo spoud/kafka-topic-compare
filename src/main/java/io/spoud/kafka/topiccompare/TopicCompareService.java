@@ -125,7 +125,7 @@ public class TopicCompareService {
                     } else {
                         String dupKey = duplicateKey.apply(record);
                         if (seenA.contains(dupKey)) {
-                            logger.log(new Difference(Difference.Type.DUPLICATE_IN_A, record, null, key));
+                            logger.log(new Difference(Difference.Type.DUPLICATE_IN_A, record, null, key, recordsA.get(dupKey)));
                         } else {
                             seenA.add(dupKey);
                             recordsA.put(dupKey, record);
@@ -163,7 +163,7 @@ public class TopicCompareService {
                     } else {
                         String dupKey = duplicateKey.apply(record);
                         if (seenB.contains(dupKey)) {
-                            logger.log(new Difference(Difference.Type.DUPLICATE_IN_B, null, record, key));
+                            logger.log(new Difference(Difference.Type.DUPLICATE_IN_B, null, record, key, recordsB.get(dupKey)));
                         } else {
                             seenB.add(dupKey);
                             recordsB.put(dupKey, record);
