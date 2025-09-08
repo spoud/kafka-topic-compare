@@ -73,6 +73,7 @@ public class TopicCompare implements QuarkusApplication {
         if (isCsv) {
             System.out.println("type,bootstrapA,topicA,partitionA,offsetA,bootstrapB,topicB,partitionB,offsetB");
         }
+        boolean printDiffDetails = hasArg(args, "--print-diff");
         DifferenceLogger logger = diff -> {
             String type = diff.getType().name();
             String bootstrapAVal = propsA.getProperty("bootstrap.servers", "");
@@ -94,6 +95,25 @@ public class TopicCompare implements QuarkusApplication {
                     escapeJson(bootstrapBVal), escapeJson(topicBVal),
                     partitionB.isEmpty() ? "null" : partitionB,
                     offsetB.isEmpty() ? "null" : offsetB);
+            }
+            if (printDiffDetails) {
+                // Print detailed diff to stderr, indented
+                String indent = "    ";
+                // 1. Headers
+                String headersA = diff.getRecordA() != null ? headersToString(diff.getRecordA().headers(), isCsv) : "";
+                String headersB = diff.getRecordB() != null ? headersToString(diff.getRecordB().headers(), isCsv) : "";
+                String timestampA = diff.getRecordA() != null ? String.valueOf(diff.getRecordA().timestamp()) : "";
+                String timestampB = diff.getRecordB() != null ? String.valueOf(diff.getRecordB().timestamp()) : "";
+                System.err.println(indent + "timestamp: " + timestampA + " <-> " + timestampB);
+                System.err.println(indent + "headers: " + headersA + " <-> " + headersB);
+                // 2. Key (base64)
+                String keyA = diff.getRecordA() != null && diff.getRecordA().key() != null ? java.util.Base64.getEncoder().encodeToString(diff.getRecordA().key()) : "";
+                String keyB = diff.getRecordB() != null && diff.getRecordB().key() != null ? java.util.Base64.getEncoder().encodeToString(diff.getRecordB().key()) : "";
+                System.err.println(indent + "key:    " + keyA + " <-> " + keyB);
+                // 3. Value (base64)
+                String valueA = diff.getRecordA() != null && diff.getRecordA().value() != null ? java.util.Base64.getEncoder().encodeToString(diff.getRecordA().value()) : "";
+                String valueB = diff.getRecordB() != null && diff.getRecordB().value() != null ? java.util.Base64.getEncoder().encodeToString(diff.getRecordB().value()) : "";
+                System.err.println(indent + "value:  " + valueA + " <-> " + valueB);
             }
         };
         String startTimestampIso = getArg(args, "--startTimestamp", null);
@@ -147,6 +167,7 @@ public class TopicCompare implements QuarkusApplication {
         System.out.println("  --startTimestamp <timestamp>   Start timestamp for message comparison (ISO 8601 format or epoch milliseconds, optional)");
         System.out.println("  --help                         Show this help message and exit");
         System.out.println("  --debug                        Enable debug logging for Kafka");
+        System.out.println("  --print-diff                   Print detailed diff (headers, key, value as base64) indented to each diff, on stderr");
         System.out.println();
         System.out.println("Example:");
         System.out.println("  java -jar kafka-topic-compare.jar --bootstrapA localhost:9092 --topicA topicA --bootstrapB localhost:9093 --topicB topicB --maxMessages 100");
@@ -218,5 +239,18 @@ public class TopicCompare implements QuarkusApplication {
 
     private static String escapeJson(String s) {
         return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    // Helper to format headers as CSV or JSON
+    private static String headersToString(org.apache.kafka.common.header.Headers headers, boolean isCsv) {
+        StringBuilder sb = new StringBuilder();
+        boolean first = true;
+        for (org.apache.kafka.common.header.Header h : headers) {
+            if (!first) sb.append(isCsv ? ";" : ", ");
+            sb.append(h.key()).append("=");
+            sb.append(h.value() != null ? java.util.Base64.getEncoder().encodeToString(h.value()) : "null");
+            first = false;
+        }
+        return sb.toString();
     }
 }

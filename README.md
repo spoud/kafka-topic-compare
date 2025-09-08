@@ -11,7 +11,9 @@ A powerful tool for comparing two Kafka topics, designed for developers and oper
   - Out-of-order messages
 - CLI tool, easy to run locally or in CI/CD
 - Supports large topics and configurable message limits
+- Support compacted topics where we check that the latest key versions / timestamps match
 - Automated tests and dependency updates via GitHub Actions and Dependabot
+- Log differences in topic properties
 
 ## Installation
 
@@ -48,6 +50,7 @@ java -jar target/quarkus-app/quarkus-run.jar \
 - `--clientPropertiesB` (optional) Path to a Java properties file for topic B consumer configuration
 - `--output` or `-o` Output format: `csv` (default) or `json`
 - `--startTimestamp` (optional) Only compare messages with timestamp >= this ISO-8601 value or epoch milliseconds
+- `--print-diff` Print detailed differences for messages with the same key but different values/headers
 - `--debug` Enable debug logging
 - `--help` Show help and exit
 
