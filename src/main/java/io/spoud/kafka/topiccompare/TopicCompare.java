@@ -73,6 +73,17 @@ public class TopicCompare implements QuarkusApplication {
         if (isCsv) {
             System.out.println("type,bootstrapA,topicA,partitionA,offsetA,bootstrapB,topicB,partitionB,offsetB");
         }
+        // Summary tracking variables
+        final long[] minOffsetA = {Long.MAX_VALUE};
+        final long[] maxOffsetA = {Long.MIN_VALUE};
+        final long[] minOffsetB = {Long.MAX_VALUE};
+        final long[] maxOffsetB = {Long.MIN_VALUE};
+        final int[] diffCount = {0};
+        // Track offsets per partition and diff type counts
+        final java.util.Map<Integer, long[]> offsetsA = new java.util.TreeMap<>(); // partition -> [min, max]
+        final java.util.Map<Integer, long[]> offsetsB = new java.util.TreeMap<>();
+        final java.util.EnumMap<Difference.Type, Integer> diffTypeCounts = new java.util.EnumMap<>(Difference.Type.class);
+        for (Difference.Type t : Difference.Type.values()) diffTypeCounts.put(t, 0);
         boolean printDiffDetails = hasArg(args, "--print-diff");
         DifferenceLogger logger = diff -> {
             String type = diff.getType().name();
@@ -115,6 +126,28 @@ public class TopicCompare implements QuarkusApplication {
                 String valueB = diff.getRecordB() != null && diff.getRecordB().value() != null ? java.util.Base64.getEncoder().encodeToString(diff.getRecordB().value()) : "";
                 System.err.println(indent + "value:  " + valueA + " <-> " + valueB);
             }
+            if (diff.getRecordA() != null) {
+                int part = diff.getRecordA().partition();
+                long off = diff.getRecordA().offset();
+                offsetsA.compute(part, (k, v) -> v == null ? new long[]{off, off} : new long[]{Math.min(v[0], off), Math.max(v[1], off)});
+            }
+            if (diff.getRecordB() != null) {
+                int part = diff.getRecordB().partition();
+                long off = diff.getRecordB().offset();
+                offsetsB.compute(part, (k, v) -> v == null ? new long[]{off, off} : new long[]{Math.min(v[0], off), Math.max(v[1], off)});
+            }
+            diffTypeCounts.put(diff.getType(), diffTypeCounts.get(diff.getType()) + 1);
+            if (diff.getRecordA() != null) {
+                long off = diff.getRecordA().offset();
+                if (off < minOffsetA[0]) minOffsetA[0] = off;
+                if (off > maxOffsetA[0]) maxOffsetA[0] = off;
+            }
+            if (diff.getRecordB() != null) {
+                long off = diff.getRecordB().offset();
+                if (off < minOffsetB[0]) minOffsetB[0] = off;
+                if (off > maxOffsetB[0]) maxOffsetB[0] = off;
+            }
+            diffCount[0]++;
         };
         String startTimestampIso = getArg(args, "--startTimestamp", null);
         Long startTimestamp = null;
@@ -134,6 +167,29 @@ public class TopicCompare implements QuarkusApplication {
             }
         }
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp);
+        // Print summary to stderr
+        System.err.println("--- Summary ---");
+        System.err.println("Differences (rows): " + diffCount[0]);
+        for (Difference.Type t : Difference.Type.values()) {
+            System.err.println("  " + t + ": " + diffTypeCounts.get(t));
+        }
+        System.err.println("Topic A partition offsets:");
+        if (offsetsA.isEmpty()) {
+            System.err.println("  (no differences in A)");
+        } else {
+            for (var e : offsetsA.entrySet()) {
+                System.err.println("  Partition " + e.getKey() + ": start=" + e.getValue()[0] + ", end=" + e.getValue()[1]);
+            }
+        }
+        System.err.println("Topic B partition offsets:");
+        if (offsetsB.isEmpty()) {
+            System.err.println("  (no differences in B)");
+        } else {
+            for (var e : offsetsB.entrySet()) {
+                System.err.println("  Partition " + e.getKey() + ": start=" + e.getValue()[0] + ", end=" + e.getValue()[1]);
+            }
+        }
+        System.err.println("----------------");
         return 0;
     }
 
