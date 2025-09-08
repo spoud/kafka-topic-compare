@@ -24,6 +24,19 @@ public class TopicCompareService {
             String cleanupB = configB.get("cleanup.policy") != null ? configB.get("cleanup.policy").value() : null;
             if ((cleanupA != null && cleanupA.contains("compact")) || (cleanupB != null && cleanupB.contains("compact"))) {
                 compacted = true;
+                System.err.println("INFO Detected compacted topic (cleanup.policy): " + topicA + " (" + propsA.getProperty("bootstrap.servers") + ") and/or " + topicB + " (" + propsB.getProperty("bootstrap.servers") + ")");
+            }
+
+            // Diff and log all configs
+            Set<String> allProps = new TreeSet<>();
+            configA.entries().forEach(e -> allProps.add(e.name()));
+            configB.entries().forEach(e -> allProps.add(e.name()));
+            for (String prop : allProps.stream().sorted().toList()) {
+                String valA = configA.get(prop) != null ? configA.get(prop).value() : "";
+                String valB = configB.get(prop) != null ? configB.get(prop).value() : "";
+                if (!Objects.equals(valA, valB)) {
+                    System.err.println("WARNING Difference in topic configuration:" + prop + "," + propsA.getProperty("bootstrap.servers", "A") + "," + valA + "," + propsB.getProperty("bootstrap.servers", "B") + "," + valB);
+                }
             }
         } catch (Exception e) {
             // If we can't determine, default to non-compacted
@@ -90,6 +103,12 @@ public class TopicCompareService {
                     return "null:null";
                 }
             };
+            // Helper to create a unique string from key, value, and timestamp for duplicate detection
+            java.util.function.Function<ConsumerRecord<byte[], byte[]>, String> duplicateKey = record -> {
+                return java.util.Base64.getEncoder().encodeToString(record.key() == null ? new byte[0] : record.key()) +
+                        ":" + java.util.Base64.getEncoder().encodeToString(record.value() == null ? new byte[0] : record.value()) +
+                        ":" + record.timestamp();
+            };
             boolean reachedEndA = false;
             boolean reachedEndB = false;
             // Read messages from topic A
@@ -108,12 +127,13 @@ public class TopicCompareService {
                         if (!seenA.contains(key)) orderA.add(key);
                         seenA.add(key);
                     } else {
-                        if (seenA.contains(key)) {
+                        String dupKey = duplicateKey.apply(record);
+                        if (seenA.contains(dupKey)) {
                             logger.log(new Difference(Difference.Type.DUPLICATE_IN_A, record, null, key));
                         } else {
-                            seenA.add(key);
-                            recordsA.put(key, record);
-                            orderA.add(key);
+                            seenA.add(dupKey);
+                            recordsA.put(dupKey, record);
+                            orderA.add(dupKey);
                         }
                     }
                     countA++;
@@ -136,12 +156,13 @@ public class TopicCompareService {
                         if (!seenB.contains(key)) orderB.add(key);
                         seenB.add(key);
                     } else {
-                        if (seenB.contains(key)) {
+                        String dupKey = duplicateKey.apply(record);
+                        if (seenB.contains(dupKey)) {
                             logger.log(new Difference(Difference.Type.DUPLICATE_IN_B, null, record, key));
                         } else {
-                            seenB.add(key);
-                            recordsB.put(key, record);
-                            orderB.add(key);
+                            seenB.add(dupKey);
+                            recordsB.put(dupKey, record);
+                            orderB.add(dupKey);
                         }
                     }
                     countB++;

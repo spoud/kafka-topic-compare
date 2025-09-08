@@ -61,7 +61,8 @@ public class TopicCompareServiceTest {
     private void produceTestMessages(KafkaProducer<byte[], byte[]> producer, String topic, int[] values) {
         for (int v : values) {
             byte[] payload = new byte[]{(byte)v};
-            producer.send(new ProducerRecord<>(topic, null, payload));
+            long timestamp = v;
+            producer.send(new ProducerRecord<>(topic, null, timestamp, null, payload));
         }
         producer.flush();
     }
@@ -293,12 +294,17 @@ public class TopicCompareServiceTest {
         String topicA = "skt-a";
         String topicB = "skt-b";
         byte[] key = new byte[]{5};
+        byte[] key2 = new byte[]{6};
         byte[] value = new byte[]{60};
         long ts1 = System.currentTimeMillis();
         long ts2 = ts1 + 1000;
+        long ts3 = ts2 + 1000;
         // Same key, different timestamps
         produceTestMessage(kafkaA.getBootstrapServers(), topicA, key, value, ts1);
+        produceTestMessage(kafkaA.getBootstrapServers(), topicA, key2, value, ts3);
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, key, value, ts2);
+        produceTestMessage(kafkaB.getBootstrapServers(), topicB, key2, value, ts3);
+        try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         Properties propsA = new Properties();
         propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
         propsA.put("group.id", "skt-a");
@@ -313,7 +319,10 @@ public class TopicCompareServiceTest {
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
-        assert logger.getDifferences().isEmpty() : "Expected no differences for same key/value with different timestamps, got " + logger.getDifferences();
+        long onlyInA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_A).count();
+        long onlyInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_B).count();
+        assert onlyInA == 1 : "Expected 1 ONLY_IN_A for different timestamps, got " + onlyInA;
+        assert onlyInB == 1 : "Expected 1 ONLY_IN_B for different timestamps, got " + onlyInB;
     }
 
     @Test
@@ -789,5 +798,49 @@ public class TopicCompareServiceTest {
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
         boolean found = logger.getDifferences().stream().anyMatch(d -> d.getType() == Difference.Type.ONLY_IN_A);
         assert found : "Expected a difference for key1 (ONLY_IN_A) after diverging value, got " + logger.getDifferences();
+    }
+
+    @Test
+    void testSameKeyDifferentTimestampsNotDuplicate() {
+        String topicA = "timestamp-key-a";
+        String topicB = "timestamp-key-b";
+        long ts = System.currentTimeMillis();
+        byte[] key = new byte[]{42};
+        byte[] value = new byte[]{99};
+        // Produce two records with same key/value but different timestamps to topicA
+        Properties prodPropsA = new Properties();
+        prodPropsA.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaA.getBootstrapServers());
+        prodPropsA.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsA.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        try (KafkaProducer<byte[], byte[]> producerA = new KafkaProducer<>(prodPropsA)) {
+            produceTestMessage(producerA, topicA, key, value, ts);
+            produceTestMessage(producerA, topicA, key, value, ts + 1000);
+        }
+        // Produce only one record to topicB
+        Properties prodPropsB = new Properties();
+        prodPropsB.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaB.getBootstrapServers());
+        prodPropsB.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsB.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        try (KafkaProducer<byte[], byte[]> producerB = new KafkaProducer<>(prodPropsB)) {
+            produceTestMessage(producerB, topicB, key, value, ts);
+        }
+        Properties propsA = new Properties();
+        propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
+        propsA.put("group.id", "timestamp-key-a");
+        propsA.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("auto.offset.reset", "earliest");
+        Properties propsB = new Properties();
+        propsB.put("bootstrap.servers", kafkaB.getBootstrapServers());
+        propsB.put("group.id", "timestamp-key-b");
+        propsB.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("auto.offset.reset", "earliest");
+        CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        long duplicatesA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.DUPLICATE_IN_A).count();
+        long duplicatesB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.DUPLICATE_IN_B).count();
+        assert duplicatesA == 0 : "Should not report duplicates in A for same key with different timestamps, got " + duplicatesA;
+        assert duplicatesB == 0 : "Should not report duplicates in B for same key with different timestamps, got " + duplicatesB;
     }
 }

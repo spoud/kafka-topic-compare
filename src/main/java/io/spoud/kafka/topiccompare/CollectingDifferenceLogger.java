@@ -16,4 +16,3 @@ public class CollectingDifferenceLogger implements DifferenceLogger {
         return Collections.unmodifiableList(differences);
     }
 }
-
