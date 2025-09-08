@@ -31,6 +31,7 @@ public class TopicCompare implements QuarkusApplication {
         }
 
         boolean debug = hasArg(args, "--debug");
+        boolean skipMissingAtEnd = hasArg(args, "--skip-missing-at-end");
         configureKafkaLogging(debug);
 
         Properties propsA = new Properties();
@@ -86,6 +87,7 @@ public class TopicCompare implements QuarkusApplication {
         for (Difference.Type t : Difference.Type.values()) diffTypeCounts.put(t, 0);
         boolean printDiffDetails = hasArg(args, "--print-diff");
         DifferenceLogger logger = diff -> {
+            if (skipMissingAtEnd && diff.getType() == Difference.Type.MISSING_AT_END) return;
             String type = diff.getType().name();
             String bootstrapAVal = propsA.getProperty("bootstrap.servers", "");
             String bootstrapBVal = propsB.getProperty("bootstrap.servers", "");
@@ -194,7 +196,7 @@ public class TopicCompare implements QuarkusApplication {
 
         String skipHeaderDiffArg = getArg(args, "--skip-header", null);
         java.util.Set<String> skipHeaderNames = null;
-        boolean disableHeaderComparison = hasArg(args, "--skip-header");;
+        boolean disableHeaderComparison = hasArg(args, "--skip-header");
         if (skipHeaderDiffArg != null) {
             if (!skipHeaderDiffArg.trim().isEmpty()) {
                 skipHeaderNames = new java.util.HashSet<>();
@@ -209,7 +211,12 @@ public class TopicCompare implements QuarkusApplication {
         System.err.println("--- Summary ---");
         System.err.println("Differences (rows): " + diffCount[0]);
         for (Difference.Type t : Difference.Type.values()) {
-            System.err.println("  " + t + ": " + diffTypeCounts.get(t));
+            if ((skipMissingAtEnd && t == Difference.Type.MISSING_AT_END) ||
+                (disableHeaderComparison && t == Difference.Type.HEADER_DIFFERENCE)) {
+                System.err.println("  " + t + ": skipped");
+            } else {
+                System.err.println("  " + t + ": " + diffTypeCounts.get(t));
+            }
         }
         System.err.println("Topic A partition offsets:");
         if (compareResult.statsA.startOffsets == null || compareResult.statsA.startOffsets.isEmpty()) {
@@ -265,6 +272,7 @@ public class TopicCompare implements QuarkusApplication {
         System.out.println("  --debug                        Enable debug logging for Kafka");
         System.out.println("  --print-diff                   Print detailed diff (headers, key, value as base64) indented to each diff, on stderr");
         System.out.println("  --skip-header <headers>        Optional comma-separated list of header names to skip in diff (or empty to disable header comparison)");
+        System.out.println("  --skip-missing-at-end          Skip logging/reporting of differences of type MISSING_AT_END");
         System.out.println();
         System.out.println("Example:");
         System.out.println("  java -jar kafka-topic-compare.jar --bootstrapA localhost:9092 --topicA topicA --bootstrapB localhost:9093 --topicB topicB --maxMessages 100");

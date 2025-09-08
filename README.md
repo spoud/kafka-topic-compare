@@ -52,6 +52,7 @@ java -jar target/quarkus-app/quarkus-run.jar \
 - `--startTimestamp` (optional) Only compare messages with timestamp >= this ISO-8601 value or epoch milliseconds
 - `--print-diff` Print detailed differences for messages with the same key but different values/headers
 - `--skip-header` Optional comma-separated list of header names to skip in diff (or empty to disable header comparison)
+- `--skip-missing-at-end` Skip logging/reporting of differences of type MISSING_AT_END`
 - `--debug` Enable debug logging
 - `--help` Show help and exit
 
