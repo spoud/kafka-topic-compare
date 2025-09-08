@@ -48,7 +48,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         // Assert differences: Only in A (1,2), Only in B (5,6)
         long onlyInA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_A).count();
         long onlyInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_B).count();
@@ -115,7 +115,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         assert logger.getDifferences().isEmpty() : "Expected no differences, got " + logger.getDifferences();
     }
 
@@ -140,7 +140,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         long onlyInA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_A).count();
         assert onlyInA == 1 : "Expected 1 ONLY_IN_A, got " + onlyInA;
     }
@@ -166,7 +166,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         long onlyInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_B).count();
         assert onlyInB == 1 : "Expected 1 ONLY_IN_B, got " + onlyInB;
     }
@@ -196,7 +196,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         long onlyInA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_A).count();
         long onlyInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_B).count();
         assert onlyInA == 1 : "Expected 1 ONLY_IN_A, got " + onlyInA;
@@ -228,7 +228,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         long duplicatesInA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.DUPLICATE_IN_A).count();
         assert duplicatesInA == 1 : "Expected 1 DUPLICATE_IN_A, got " + duplicatesInA;
     }
@@ -258,7 +258,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         long duplicatesInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.DUPLICATE_IN_B).count();
         assert duplicatesInB == 1 : "Expected 1 DUPLICATE_IN_B, got " + duplicatesInB;
     }
@@ -285,7 +285,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         assert logger.getDifferences().isEmpty() : "Expected no differences for null key, got " + logger.getDifferences();
     }
 
@@ -318,7 +318,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         long onlyInA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_A).count();
         long onlyInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_B).count();
         assert onlyInA == 1 : "Expected 1 ONLY_IN_A for different timestamps, got " + onlyInA;
@@ -342,7 +342,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         assert logger.getDifferences().isEmpty() : "Expected no differences for empty topics, got " + logger.getDifferences();
     }
 
@@ -368,7 +368,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         assert logger.getDifferences().isEmpty() : "Expected no differences for binary key, got " + logger.getDifferences();
     }
 
@@ -407,7 +407,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 50, logger); // Should only compare 50
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 50, logger, null); // Should only compare 50
         assert logger.getDifferences().isEmpty() : "Expected no differences for first 50 messages, got " + logger.getDifferences();
     }
 
@@ -436,7 +436,7 @@ public class TopicCompareServiceTest {
         produceTestMessageWithHeader(kafkaB.getBootstrapServers(), topicB, key, value, ts, "foo", new byte[]{2});
         try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         long headerDiffs = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.HEADER_DIFFERENCE).count();
         assert headerDiffs == 1 : "Expected 1 HEADER_DIFFERENCE, got " + headerDiffs;
     }
@@ -503,7 +503,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, total + duplicateCount, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, total + duplicateCount, logger, null);
         long duplicatesInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.DUPLICATE_IN_B).count();
         long onlyInA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_A).count();
         long onlyInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_B).count();
@@ -575,7 +575,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, total, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, total, logger, null);
         long outOfOrder = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.OUT_OF_ORDER).count();
         assert outOfOrder == shuffleCount : "Expected " + shuffleCount + " OUT_OF_ORDER, got " + outOfOrder;
     }
@@ -784,7 +784,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         assert logger.getDifferences().isEmpty() : "Expected no differences after compaction, got " + logger.getDifferences();
 
         // Now, produce a different value for key1 in clusterA only
@@ -795,7 +795,7 @@ public class TopicCompareServiceTest {
 
         Thread.sleep(500);
         logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         boolean found = logger.getDifferences().stream().anyMatch(d -> d.getType() == Difference.Type.ONLY_IN_A);
         assert found : "Expected a difference for key1 (ONLY_IN_A) after diverging value, got " + logger.getDifferences();
     }
@@ -837,7 +837,7 @@ public class TopicCompareServiceTest {
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger);
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         long duplicatesA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.DUPLICATE_IN_A).count();
         long duplicatesB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.DUPLICATE_IN_B).count();
         assert duplicatesA == 0 : "Should not report duplicates in A for same key with different timestamps, got " + duplicatesA;

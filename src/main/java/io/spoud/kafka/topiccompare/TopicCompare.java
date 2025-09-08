@@ -166,7 +166,20 @@ public class TopicCompare implements QuarkusApplication {
                 }
             }
         }
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp);
+        // Parse --skip-header option
+
+        String skipHeaderDiffArg = getArg(args, "--skip-header", null);
+        java.util.Set<String> skipHeaderNames = null;
+        boolean disableHeaderComparison = hasArg(args, "--skip-header");;
+        if (skipHeaderDiffArg != null) {
+            if (!skipHeaderDiffArg.trim().isEmpty()) {
+                skipHeaderNames = new java.util.HashSet<>();
+                for (String h : skipHeaderDiffArg.split(",")) {
+                    if (!h.trim().isEmpty()) skipHeaderNames.add(h.trim());
+                }
+            }
+        }
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, skipHeaderNames, disableHeaderComparison);
         // Print summary to stderr
         System.err.println("--- Summary ---");
         System.err.println("Differences (rows): " + diffCount[0]);
@@ -224,6 +237,7 @@ public class TopicCompare implements QuarkusApplication {
         System.out.println("  --help                         Show this help message and exit");
         System.out.println("  --debug                        Enable debug logging for Kafka");
         System.out.println("  --print-diff                   Print detailed diff (headers, key, value as base64) indented to each diff, on stderr");
+        System.out.println("  --skip-header <headers>        Optional comma-separated list of header names to skip in diff (or empty to disable header comparison)");
         System.out.println();
         System.out.println("Example:");
         System.out.println("  java -jar kafka-topic-compare.jar --bootstrapA localhost:9092 --topicA topicA --bootstrapB localhost:9093 --topicB topicB --maxMessages 100");

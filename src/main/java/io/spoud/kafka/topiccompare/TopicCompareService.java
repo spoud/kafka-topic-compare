@@ -11,41 +11,8 @@ import java.util.*;
 import java.time.Duration;
 
 public class TopicCompareService {
-    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp) {
-        boolean compacted = false;
-        try (AdminClient adminA = AdminClient.create(propsA); AdminClient adminB = AdminClient.create(propsB)) {
-            ConfigResource resA = new ConfigResource(ConfigResource.Type.TOPIC, topicA);
-            ConfigResource resB = new ConfigResource(ConfigResource.Type.TOPIC, topicB);
-            DescribeConfigsResult resultA = adminA.describeConfigs(Collections.singleton(resA));
-            DescribeConfigsResult resultB = adminB.describeConfigs(Collections.singleton(resB));
-            Config configA = resultA.all().get().get(resA);
-            Config configB = resultB.all().get().get(resB);
-            String cleanupA = configA.get("cleanup.policy") != null ? configA.get("cleanup.policy").value() : null;
-            String cleanupB = configB.get("cleanup.policy") != null ? configB.get("cleanup.policy").value() : null;
-            if ((cleanupA != null && cleanupA.contains("compact")) || (cleanupB != null && cleanupB.contains("compact"))) {
-                compacted = true;
-                System.err.println("INFO Detected compacted topic (cleanup.policy): " + topicA + " (" + propsA.getProperty("bootstrap.servers") + ") and/or " + topicB + " (" + propsB.getProperty("bootstrap.servers") + ")");
-            }
-
-            // Diff and log all configs
-            Set<String> allProps = new TreeSet<>();
-            configA.entries().forEach(e -> allProps.add(e.name()));
-            configB.entries().forEach(e -> allProps.add(e.name()));
-            for (String prop : allProps.stream().sorted().toList()) {
-                String valA = configA.get(prop) != null ? configA.get(prop).value() : "";
-                String valB = configB.get(prop) != null ? configB.get(prop).value() : "";
-                if (!Objects.equals(valA, valB)) {
-                    System.err.println("WARNING Difference in topic configuration:" + prop + "," + propsA.getProperty("bootstrap.servers", "A") + "," + valA + "," + propsB.getProperty("bootstrap.servers", "B") + "," + valB);
-                }
-            }
-        } catch (Exception e) {
-            // If we can't determine, default to non-compacted
-            compacted = false;
-        }
-        compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted);
-    }
-
-    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted) {
+    // Unified compareTopics implementation
+    private void compareTopicsImpl(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted, Set<String> skipHeaderNames, boolean disableHeaderComparison) {
         try (KafkaConsumer<byte[], byte[]> consumerA = new KafkaConsumer<>(propsA);
              KafkaConsumer<byte[], byte[]> consumerB = new KafkaConsumer<>(propsB)) {
 
@@ -111,6 +78,10 @@ public class TopicCompareService {
             };
             boolean reachedEndA = false;
             boolean reachedEndB = false;
+            long lastTimestampA = -1;
+            long lastTimestampB = -1;
+            boolean monotonicTimestampsA = true;
+            boolean monotonicTimestampsB = true;
             // Read messages from topic A
             int countA = 0;
             while (countA < maxMessages) {
@@ -121,6 +92,10 @@ public class TopicCompareService {
                 }
                 for (var record : records) {
                     String key = keyHash.apply(record.key(), compacted ? null : record.value());
+                    lastTimestampA = Math.max(record.timestamp(), lastTimestampA);
+                    if (record.timestamp() < lastTimestampA) {
+                        monotonicTimestampsA = false;
+                    }
                     if (compacted) {
                         // Always keep the latest for this key
                         recordsA.put(key, record);
@@ -151,6 +126,10 @@ public class TopicCompareService {
                 }
                 for (var record : records) {
                     String key = keyHash.apply(record.key(), compacted ? null : record.value());
+                    lastTimestampB = Math.max(record.timestamp(), lastTimestampB);
+                    if (record.timestamp() < lastTimestampA) {
+                        monotonicTimestampsB = false;
+                    }
                     if (compacted) {
                         recordsB.put(key, record);
                         if (!seenB.contains(key)) orderB.add(key);
@@ -175,21 +154,29 @@ public class TopicCompareService {
             allKeys.addAll(recordsA.keySet());
             allKeys.addAll(recordsB.keySet());
 
-            // Identify contiguous missing block at the end for A
+            // Identify the last contiguous block of missing records at the end for A
             Set<String> missingAtEndA = new HashSet<>();
-            if (reachedEndA && reachedEndB && !orderA.isEmpty()) {
+            if (!orderA.isEmpty()) {
                 int idx = orderA.size() - 1;
-                while (idx >= 0 && !recordsB.containsKey(orderA.get(idx))) {
-                    missingAtEndA.add(orderA.get(idx));
+                while (idx >= 0) {
+                    String key = orderA.get(idx);
+                    if (recordsB.containsKey(key)) {
+                        break;
+                    }
+                    missingAtEndA.add(key);
                     idx--;
                 }
             }
-            // Identify contiguous missing block at the end for B
+            // Identify the last contiguous block of missing records at the end for B
             Set<String> missingAtEndB = new HashSet<>();
-            if (reachedEndA && reachedEndB && !orderB.isEmpty()) {
+            if (!orderB.isEmpty()) {
                 int idx = orderB.size() - 1;
-                while (idx >= 0 && !recordsA.containsKey(orderB.get(idx))) {
-                    missingAtEndB.add(orderB.get(idx));
+                while (idx >= 0) {
+                    String key = orderB.get(idx);
+                    if (recordsA.containsKey(key)) {
+                        break;
+                    }
+                    missingAtEndB.add(key);
                     idx--;
                 }
             }
@@ -200,17 +187,19 @@ public class TopicCompareService {
                 if (inA && inB) {
                     ConsumerRecord<byte[], byte[]> recA = recordsA.get(key);
                     ConsumerRecord<byte[], byte[]> recB = recordsB.get(key);
-                    if (!headersEqual(recA, recB)) {
-                        logger.log(new Difference(Difference.Type.HEADER_DIFFERENCE, recA, recB, key));
+                    if (!headersEqual(recA, recB, skipHeaderNames, disableHeaderComparison)) {
+                        if (!disableHeaderComparison) {
+                            logger.log(new Difference(Difference.Type.HEADER_DIFFERENCE, recA, recB, key));
+                        }
                     }
                 } else if (inA && !inB) {
-                    if (missingAtEndA.contains(key) && missingAtEndA.size() > 0) {
+                    if (missingAtEndA.contains(key)) {
                         logger.log(new Difference(Difference.Type.MISSING_AT_END, recordsA.get(key), null, key));
                     } else {
                         logger.log(new Difference(Difference.Type.ONLY_IN_A, recordsA.get(key), null, key));
                     }
                 } else if (!inA && inB) {
-                    if (missingAtEndB.contains(key) && missingAtEndB.size() > 0) {
+                    if (missingAtEndB.contains(key)) {
                         logger.log(new Difference(Difference.Type.MISSING_AT_END, null, recordsB.get(key), key));
                     } else {
                         logger.log(new Difference(Difference.Type.ONLY_IN_B, null, recordsB.get(key), key));
@@ -233,24 +222,81 @@ public class TopicCompareService {
         }
     }
 
-    private boolean headersEqual(ConsumerRecord<byte[], byte[]> a, ConsumerRecord<byte[], byte[]> b) {
+    // Helper for config diff and compacted detection
+    private boolean isCompactedAndLogConfigDiff(Properties propsA, String topicA, Properties propsB, String topicB) {
+        boolean compacted = false;
+        try (AdminClient adminA = AdminClient.create(propsA); AdminClient adminB = AdminClient.create(propsB)) {
+            ConfigResource resA = new ConfigResource(ConfigResource.Type.TOPIC, topicA);
+            ConfigResource resB = new ConfigResource(ConfigResource.Type.TOPIC, topicB);
+            DescribeConfigsResult resultA = adminA.describeConfigs(Collections.singleton(resA));
+            DescribeConfigsResult resultB = adminB.describeConfigs(Collections.singleton(resB));
+            Config configA = resultA.all().get().get(resA);
+            Config configB = resultB.all().get().get(resB);
+            String cleanupA = configA.get("cleanup.policy") != null ? configA.get("cleanup.policy").value() : null;
+            String cleanupB = configB.get("cleanup.policy") != null ? configB.get("cleanup.policy").value() : null;
+            if ((cleanupA != null && cleanupA.contains("compact")) || (cleanupB != null && cleanupB.contains("compact"))) {
+                compacted = true;
+                System.err.println("INFO Detected compacted topic (cleanup.policy): " + topicA + " (" + propsA.getProperty("bootstrap.servers") + ") and/or " + topicB + " (" + propsB.getProperty("bootstrap.servers") + ")");
+            }
+            // Diff and log all configs
+            Set<String> allProps = new TreeSet<>();
+            configA.entries().forEach(e -> allProps.add(e.name()));
+            configB.entries().forEach(e -> allProps.add(e.name()));
+            for (String prop : allProps.stream().sorted().toList()) {
+                String valA = configA.get(prop) != null ? configA.get(prop).value() : "";
+                String valB = configB.get(prop) != null ? configB.get(prop).value() : "";
+                if (!Objects.equals(valA, valB)) {
+                    System.err.println("WARNING Difference in topic configuration:" + prop + "," + propsA.getProperty("bootstrap.servers", "A") + "," + valA + "," + propsB.getProperty("bootstrap.servers", "B") + "," + valB);
+                }
+            }
+        } catch (Exception e) {
+            compacted = false;
+        }
+        return compacted;
+    }
+
+    // Public API: original signatures, now all delegate to unified implementation
+    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp) {
+        boolean compacted = isCompactedAndLogConfigDiff(propsA, topicA, propsB, topicB);
+        compareTopicsImpl(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted, null, false);
+    }
+
+    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted) {
+        compareTopicsImpl(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted, null, false);
+    }
+
+    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, Set<String> skipHeaderNames, boolean disableHeaderComparison) {
+        boolean compacted = isCompactedAndLogConfigDiff(propsA, topicA, propsB, topicB);
+        compareTopicsImpl(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted, skipHeaderNames, disableHeaderComparison);
+    }
+
+    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted, Set<String> skipHeaderNames, boolean disableHeaderComparison) {
+        compareTopicsImpl(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted, skipHeaderNames, disableHeaderComparison);
+    }
+
+    // Helper for header comparison with skip/disable
+    private boolean headersEqual(ConsumerRecord<byte[], byte[]> a, ConsumerRecord<byte[], byte[]> b, Set<String> skipHeaderNames, boolean disableHeaderComparison) {
+        if (disableHeaderComparison) return true;
         if (a == null || b == null) return false;
         var ha = a.headers();
         var hb = b.headers();
-        if (ha.toArray().length != hb.toArray().length) return false;
+        java.util.Map<String, byte[]> mapA = new java.util.HashMap<>();
+        java.util.Map<String, byte[]> mapB = new java.util.HashMap<>();
         for (org.apache.kafka.common.header.Header headerA : ha) {
-            org.apache.kafka.common.header.Header headerB = hb.lastHeader(headerA.key());
-            if (headerB == null || !Arrays.equals(headerA.value(), headerB.value())) return false;
+            if (skipHeaderNames != null && skipHeaderNames.contains(headerA.key())) continue;
+            mapA.put(headerA.key(), headerA.value());
         }
         for (org.apache.kafka.common.header.Header headerB : hb) {
-            org.apache.kafka.common.header.Header headerA = ha.lastHeader(headerB.key());
-            if (headerA == null || !Arrays.equals(headerB.value(), headerA.value())) return false;
+            if (skipHeaderNames != null && skipHeaderNames.contains(headerB.key())) continue;
+            mapB.put(headerB.key(), headerB.value());
+        }
+        if (mapA.size() != mapB.size()) return false;
+        for (String k : mapA.keySet()) {
+            if (!mapB.containsKey(k) || !Arrays.equals(mapA.get(k), mapB.get(k))) return false;
+        }
+        for (String k : mapB.keySet()) {
+            if (!mapA.containsKey(k) || !Arrays.equals(mapB.get(k), mapA.get(k))) return false;
         }
         return true;
-    }
-
-    // Backward compatible method
-    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger) {
-        compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, null);
     }
 }

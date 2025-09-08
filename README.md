@@ -51,10 +51,23 @@ java -jar target/quarkus-app/quarkus-run.jar \
 - `--output` or `-o` Output format: `csv` (default) or `json`
 - `--startTimestamp` (optional) Only compare messages with timestamp >= this ISO-8601 value or epoch milliseconds
 - `--print-diff` Print detailed differences for messages with the same key but different values/headers
+- `--skip-header` Optional comma-separated list of header names to skip in diff (or empty to disable header comparison)
 - `--debug` Enable debug logging
 - `--help` Show help and exit
 
 > For advanced Kafka consumer settings (e.g., group.id, deserializers), use `--clientPropertiesA` and `--clientPropertiesB` to provide a properties file. CLI arguments take precedence over properties file values.
+ 
+
+
+NOTE: The outputs of the tool are sent to standard out (stdout). Errors and logs are sent to standard error (stderr).
+If you want to redirect output to a file, use shell redirection, e.g.:
+```sh
+# logs into error.log, output into output.csv
+java -jar target/quarkus-app/quarkus-run.jar ... 1>output.csv 2>error.log
+
+# Output and logs into the same file
+java -jar target/quarkus-app/quarkus-run.jar ... &> output.log
+```
 
 ### Example Output
 #### CSV (default)
