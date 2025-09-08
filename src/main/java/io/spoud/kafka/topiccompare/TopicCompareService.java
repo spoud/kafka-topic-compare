@@ -12,12 +12,19 @@ import java.time.Duration;
 
 public class TopicCompareService {
     // Unified compareTopics implementation
-    private void compareTopicsImpl(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted, Set<String> skipHeaderNames, boolean disableHeaderComparison) {
+    private CompareResult compareTopicsImpl(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted, Set<String> skipHeaderNames, boolean disableHeaderComparison) {
+        CompareStats statsA = null;
+        CompareStats statsB = null;
         try (KafkaConsumer<byte[], byte[]> consumerA = new KafkaConsumer<>(propsA);
              KafkaConsumer<byte[], byte[]> consumerB = new KafkaConsumer<>(propsB)) {
 
             consumerA.subscribe(Collections.singletonList(topicA));
             consumerB.subscribe(Collections.singletonList(topicB));
+
+            Map<org.apache.kafka.common.TopicPartition, Long> effectiveStartOffsetsA = new HashMap<>();
+            Map<org.apache.kafka.common.TopicPartition, Long> effectiveStartOffsetsB = new HashMap<>();
+            Map<org.apache.kafka.common.TopicPartition, Long> lastOffsetsA = new HashMap<>();
+            Map<org.apache.kafka.common.TopicPartition, Long> lastOffsetsB = new HashMap<>();
 
             // Seek to startTimestamp if provided
             if (startTimestamp != null) {
@@ -43,15 +50,29 @@ public class TopicCompareService {
                 for (var entry : offsetsA.entrySet()) {
                     if (entry.getValue() != null) {
                         consumerA.seek(entry.getKey(), entry.getValue().offset());
+                        effectiveStartOffsetsA.put(entry.getKey(), entry.getValue().offset());
                     }
                 }
                 Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.consumer.OffsetAndTimestamp> offsetsB = consumerB.offsetsForTimes(timestampMapB);
                 for (var entry : offsetsB.entrySet()) {
                     if (entry.getValue() != null) {
                         consumerB.seek(entry.getKey(), entry.getValue().offset());
+                        effectiveStartOffsetsB.put(entry.getKey(), entry.getValue().offset());
                     }
                 }
+            } else {
+                for (org.apache.kafka.common.TopicPartition tp : consumerA.assignment()) {
+                    long startOffset = consumerA.beginningOffsets(Collections.singleton(tp)).get(tp);
+                    effectiveStartOffsetsA.put(tp, startOffset);
+                }
+                for (org.apache.kafka.common.TopicPartition tp : consumerB.assignment()) {
+                    long startOffset = consumerB.beginningOffsets(Collections.singleton(tp)).get(tp);
+                    effectiveStartOffsetsB.put(tp, startOffset);
+                }
             }
+
+            statsA = new CompareStats(effectiveStartOffsetsA);
+            statsB = new CompareStats(effectiveStartOffsetsB);
 
             Map<String, ConsumerRecord<byte[], byte[]>> recordsA = new HashMap<>();
             Map<String, ConsumerRecord<byte[], byte[]>> recordsB = new HashMap<>();
@@ -92,12 +113,12 @@ public class TopicCompareService {
                 }
                 for (var record : records) {
                     String key = keyHash.apply(record.key(), compacted ? null : record.value());
-                    lastTimestampA = Math.max(record.timestamp(), lastTimestampA);
-                    if (record.timestamp() < lastTimestampA) {
+                    if (lastTimestampA > record.timestamp()) {
                         monotonicTimestampsA = false;
                     }
+                    lastTimestampA = record.timestamp();
+                    lastOffsetsA.put(new org.apache.kafka.common.TopicPartition(record.topic(), record.partition()), record.offset());
                     if (compacted) {
-                        // Always keep the latest for this key
                         recordsA.put(key, record);
                         if (!seenA.contains(key)) orderA.add(key);
                         seenA.add(key);
@@ -115,6 +136,10 @@ public class TopicCompareService {
                     if (countA >= maxMessages) break;
                 }
             }
+            statsA.endReached = reachedEndA;
+            statsA.eventsRead = countA;
+            statsA.timestampsMonotonous = monotonicTimestampsA;
+            statsA.endOffsets = new HashMap<>(lastOffsetsA);
 
             // Read messages from topic B
             int countB = 0;
@@ -126,10 +151,11 @@ public class TopicCompareService {
                 }
                 for (var record : records) {
                     String key = keyHash.apply(record.key(), compacted ? null : record.value());
-                    lastTimestampB = Math.max(record.timestamp(), lastTimestampB);
-                    if (record.timestamp() < lastTimestampA) {
+                    if (lastTimestampB > record.timestamp()) {
                         monotonicTimestampsB = false;
                     }
+                    lastTimestampB = record.timestamp();
+                    lastOffsetsB.put(new org.apache.kafka.common.TopicPartition(record.topic(), record.partition()), record.offset());
                     if (compacted) {
                         recordsB.put(key, record);
                         if (!seenB.contains(key)) orderB.add(key);
@@ -148,6 +174,10 @@ public class TopicCompareService {
                     if (countB >= maxMessages) break;
                 }
             }
+            statsB.endReached = reachedEndB;
+            statsB.eventsRead = countB;
+            statsB.timestampsMonotonous = monotonicTimestampsB;
+            statsB.endOffsets = new HashMap<>(lastOffsetsB);
 
             // Compare
             Set<String> allKeys = new HashSet<>();
@@ -219,7 +249,9 @@ public class TopicCompareService {
                     }
                 }
             }
+
         }
+        return new CompareResult(statsA, statsB);
     }
 
     // Helper for config diff and compacted detection
@@ -256,22 +288,22 @@ public class TopicCompareService {
     }
 
     // Public API: original signatures, now all delegate to unified implementation
-    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp) {
+    public CompareResult compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp) {
         boolean compacted = isCompactedAndLogConfigDiff(propsA, topicA, propsB, topicB);
-        compareTopicsImpl(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted, null, false);
+        return compareTopicsImpl(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted, null, false);
     }
 
-    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted) {
-        compareTopicsImpl(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted, null, false);
+    public CompareResult compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted) {
+        return compareTopicsImpl(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted, null, false);
     }
 
-    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, Set<String> skipHeaderNames, boolean disableHeaderComparison) {
+    public CompareResult compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, Set<String> skipHeaderNames, boolean disableHeaderComparison) {
         boolean compacted = isCompactedAndLogConfigDiff(propsA, topicA, propsB, topicB);
-        compareTopicsImpl(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted, skipHeaderNames, disableHeaderComparison);
+        return compareTopicsImpl(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted, skipHeaderNames, disableHeaderComparison);
     }
 
-    public void compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted, Set<String> skipHeaderNames, boolean disableHeaderComparison) {
-        compareTopicsImpl(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted, skipHeaderNames, disableHeaderComparison);
+    public CompareResult compareTopics(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted, Set<String> skipHeaderNames, boolean disableHeaderComparison) {
+        return compareTopicsImpl(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, compacted, skipHeaderNames, disableHeaderComparison);
     }
 
     // Helper for header comparison with skip/disable

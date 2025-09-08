@@ -179,7 +179,8 @@ public class TopicCompare implements QuarkusApplication {
                 }
             }
         }
-        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, skipHeaderNames, disableHeaderComparison);
+        TopicCompareService service = new TopicCompareService();
+        CompareResult compareResult = service.compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, skipHeaderNames, disableHeaderComparison);
         // Print summary to stderr
         System.err.println("--- Summary ---");
         System.err.println("Differences (rows): " + diffCount[0]);
@@ -187,21 +188,23 @@ public class TopicCompare implements QuarkusApplication {
             System.err.println("  " + t + ": " + diffTypeCounts.get(t));
         }
         System.err.println("Topic A partition offsets:");
-        if (offsetsA.isEmpty()) {
-            System.err.println("  (no differences in A)");
+        if (compareResult.statsA.startOffsets == null || compareResult.statsA.startOffsets.isEmpty()) {
+            System.err.println("  (no data in A)");
         } else {
-            for (var e : offsetsA.entrySet()) {
-                System.err.println("  Partition " + e.getKey() + ": start=" + e.getValue()[0] + ", end=" + e.getValue()[1]);
+            for (var e : compareResult.statsA.startOffsets.entrySet()) {
+                System.err.println("  Partition " + e.getKey().partition() + ": start=" + e.getValue() + ", end=" + compareResult.statsA.endOffsets.getOrDefault(e.getKey(), -1L));
             }
         }
         System.err.println("Topic B partition offsets:");
-        if (offsetsB.isEmpty()) {
-            System.err.println("  (no differences in B)");
+        if (compareResult.statsB.startOffsets == null || compareResult.statsB.startOffsets.isEmpty()) {
+            System.err.println("  (no data in B)");
         } else {
-            for (var e : offsetsB.entrySet()) {
-                System.err.println("  Partition " + e.getKey() + ": start=" + e.getValue()[0] + ", end=" + e.getValue()[1]);
+            for (var e : compareResult.statsB.startOffsets.entrySet()) {
+                System.err.println("  Partition " + e.getKey().partition() + ": start=" + e.getValue() + ", end=" + compareResult.statsB.endOffsets.getOrDefault(e.getKey(), -1L));
             }
         }
+        System.err.println("A: eventsRead=" + compareResult.statsA.eventsRead + ", endReached=" + compareResult.statsA.endReached + ", timestampsMonotonous=" + compareResult.statsA.timestampsMonotonous);
+        System.err.println("B: eventsRead=" + compareResult.statsB.eventsRead + ", endReached=" + compareResult.statsB.endReached + ", timestampsMonotonous=" + compareResult.statsB.timestampsMonotonous);
         System.err.println("----------------");
         return 0;
     }
