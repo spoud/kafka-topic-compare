@@ -1,0 +1,94 @@
+services:
+  brokerA:
+    image: apache/kafka:4.1.0
+    hostname: brokerA
+    container_name: brokerA
+    ports:
+      - "9091:9091"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_JMX_PORT: 9991
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://brokerA:29091,PLAINTEXT_HOST://localhost:9091
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: "6"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@brokerA:29090'
+      KAFKA_LISTENERS: 'PLAINTEXT://brokerA:29091,CONTROLLER://brokerA:29090,PLAINTEXT_HOST://0.0.0.0:9091'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      CLUSTER_ID: '7OdClrJXRJWjcIxXF7CLpA'
+  brokerB:
+    image: apache/kafka:4.1.0
+    hostname: brokerB
+    container_name: brokerB
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_JMX_PORT: 9992
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://brokerB:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: "6"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '2@brokerB:29093'
+      KAFKA_LISTENERS: 'PLAINTEXT://brokerB:29092,CONTROLLER://brokerB:29093,PLAINTEXT_HOST://0.0.0.0:9092'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      CLUSTER_ID: 'ObTrjwhuRYOhKJDJBdguPQ'
+  mirror-maker:
+    image: apache/kafka:4.1.0
+    hostname: mirror-maker
+    container_name: mirror-maker
+    depends_on:
+      - brokerA
+      - brokerB
+    ports:
+      - "8083:8083"
+    command:
+#      - tail
+#      - -f
+#      - /dev/null
+       - /opt/kafka/bin/connect-mirror-maker.sh
+       - /opt/kafka/config/mm2.properties
+    volumes:
+      - ./mm2.properties:/opt/kafka/config/mm2.properties
+
+  datagen:
+    image: cnfldemos/cp-server-connect-datagen:0.6.7-8.0.0
+    hostname: datagen
+    container_name: datagen
+    depends_on:
+      - brokerA
+    ports:
+      - "8084:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: brokerA:29091
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: "datagen"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: 10000
+      CONNECT_OFFSET_STORAGE_TOPIC: docker-connect-offsets
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_TOPIC: docker-connect-status
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+
+    volumes:
+      - ./connect-standalone.properties:/etc/kafka/connect-standalone.properties
+      - ./datagen-users.properties:/etc/kafka/datagen-users.properties
+    command: ["connect-standalone", "/etc/kafka/connect-standalone.properties", "/etc/kafka/datagen-users.properties"]
