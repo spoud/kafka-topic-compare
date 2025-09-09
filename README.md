@@ -178,8 +178,8 @@ DUPLICATE_IN_B,localhost:9091,,,,localhost:9092,users,4,235
 
 ```
 
-
-
+*NOTE*: Depending on timing, you may see different differences. It's also possible to omit the start timestamp to compare all messages, but that may take a long time if your topics are large.
+If you see unexpected differences, experiment with increasing `--maxMessages` or setting a earlier `--startTimestamp` as you could be missing original messages of duplicates.
 
 ## Running Tests
 

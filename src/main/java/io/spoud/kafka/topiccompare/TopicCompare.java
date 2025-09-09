@@ -78,6 +78,8 @@ public class TopicCompare implements QuarkusApplication {
         if (isCsv) {
             System.out.println("type,bootstrapA,topicA,partitionA,offsetA,bootstrapB,topicB,partitionB,offsetB");
         }
+        // Collect all differences for sorting
+        java.util.List<Difference> allDiffs = new java.util.ArrayList<>();
         // Summary tracking variables
         final long[] minOffsetA = {Long.MAX_VALUE};
         final long[] maxOffsetA = {Long.MIN_VALUE};
@@ -92,6 +94,77 @@ public class TopicCompare implements QuarkusApplication {
         boolean printDiffDetails = hasArg(args, "--print-diff");
         DifferenceLogger logger = diff -> {
             if (skipMissingAtEnd && diff.getType() == Difference.Type.MISSING_AT_END) return;
+            allDiffs.add(diff);
+            if (diff.getRecordA() != null) {
+                int part = diff.getRecordA().partition();
+                long off = diff.getRecordA().offset();
+                offsetsA.compute(part, (k, v) -> v == null ? new long[]{off, off} : new long[]{Math.min(v[0], off), Math.max(v[1], off)});
+            }
+            if (diff.getRecordB() != null) {
+                int part = diff.getRecordB().partition();
+                long off = diff.getRecordB().offset();
+                offsetsB.compute(part, (k, v) -> v == null ? new long[]{off, off} : new long[]{Math.min(v[0], off), Math.max(v[1], off)});
+            }
+            diffTypeCounts.put(diff.getType(), diffTypeCounts.get(diff.getType()) + 1);
+            if (diff.getRecordA() != null) {
+                long off = diff.getRecordA().offset();
+                if (off < minOffsetA[0]) minOffsetA[0] = off;
+                if (off > maxOffsetA[0]) maxOffsetA[0] = off;
+            }
+            if (diff.getRecordB() != null) {
+                long off = diff.getRecordB().offset();
+                if (off < minOffsetB[0]) minOffsetB[0] = off;
+                if (off > maxOffsetB[0]) maxOffsetB[0] = off;
+            }
+            diffCount[0]++;
+        };
+        String startTimestampIso = getArg(args, "--startTimestamp", null);
+        Long startTimestamp = null;
+        if (startTimestampIso != null) {
+            try {
+                // Try ISO 8601 first
+                java.time.Instant instant = java.time.Instant.parse(startTimestampIso);
+                startTimestamp = instant.toEpochMilli();
+            } catch (Exception isoEx) {
+                try {
+                    // Try epoch millis
+                    startTimestamp = Long.parseLong(startTimestampIso);
+                } catch (Exception millisEx) {
+                    System.err.println("Invalid timestamp for --startTimestamp: " + startTimestampIso + ". Use ISO 8601 or epoch millis.");
+                    System.exit(1);
+                }
+            }
+        }
+        // Parse --skip-header option
+
+        String skipHeaderDiffArg = getArg(args, "--skip-header", null);
+        java.util.Set<String> skipHeaderNames = null;
+        boolean disableHeaderComparison = hasArg(args, "--skip-header");
+        if (skipHeaderDiffArg != null) {
+            if (!skipHeaderDiffArg.trim().isEmpty()) {
+                skipHeaderNames = new java.util.HashSet<>();
+                for (String h : skipHeaderDiffArg.split(",")) {
+                    if (!h.trim().isEmpty()) skipHeaderNames.add(h.trim());
+                }
+            }
+        }
+        TopicCompareService service = new TopicCompareService();
+        CompareResult compareResult = service.compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, skipHeaderNames, disableHeaderComparison);
+        // Sort and print all differences
+        allDiffs.sort((a, b) -> {
+            String ta = a.getRecordA() != null ? a.getRecordA().topic() : "";
+            String tb = b.getRecordA() != null ? b.getRecordA().topic() : "";
+            int cmp = ta.compareTo(tb);
+            if (cmp != 0) return cmp;
+            int pa = a.getRecordA() != null ? a.getRecordA().partition() : Integer.MIN_VALUE;
+            int pb = b.getRecordA() != null ? b.getRecordA().partition() : Integer.MIN_VALUE;
+            cmp = Integer.compare(pa, pb);
+            if (cmp != 0) return cmp;
+            long oa = a.getRecordA() != null ? a.getRecordA().offset() : Long.MIN_VALUE;
+            long ob = b.getRecordA() != null ? b.getRecordA().offset() : Long.MIN_VALUE;
+            return Long.compare(oa, ob);
+        });
+        for (Difference diff : allDiffs) {
             String type = diff.getType().name();
             String bootstrapAVal = propsA.getProperty("bootstrap.servers", "");
             String bootstrapBVal = propsB.getProperty("bootstrap.servers", "");
@@ -156,61 +229,7 @@ public class TopicCompare implements QuarkusApplication {
                     System.err.println(indent + "    value:   " + dupValue);
                 }
             }
-            if (diff.getRecordA() != null) {
-                int part = diff.getRecordA().partition();
-                long off = diff.getRecordA().offset();
-                offsetsA.compute(part, (k, v) -> v == null ? new long[]{off, off} : new long[]{Math.min(v[0], off), Math.max(v[1], off)});
-            }
-            if (diff.getRecordB() != null) {
-                int part = diff.getRecordB().partition();
-                long off = diff.getRecordB().offset();
-                offsetsB.compute(part, (k, v) -> v == null ? new long[]{off, off} : new long[]{Math.min(v[0], off), Math.max(v[1], off)});
-            }
-            diffTypeCounts.put(diff.getType(), diffTypeCounts.get(diff.getType()) + 1);
-            if (diff.getRecordA() != null) {
-                long off = diff.getRecordA().offset();
-                if (off < minOffsetA[0]) minOffsetA[0] = off;
-                if (off > maxOffsetA[0]) maxOffsetA[0] = off;
-            }
-            if (diff.getRecordB() != null) {
-                long off = diff.getRecordB().offset();
-                if (off < minOffsetB[0]) minOffsetB[0] = off;
-                if (off > maxOffsetB[0]) maxOffsetB[0] = off;
-            }
-            diffCount[0]++;
-        };
-        String startTimestampIso = getArg(args, "--startTimestamp", null);
-        Long startTimestamp = null;
-        if (startTimestampIso != null) {
-            try {
-                // Try ISO 8601 first
-                java.time.Instant instant = java.time.Instant.parse(startTimestampIso);
-                startTimestamp = instant.toEpochMilli();
-            } catch (Exception isoEx) {
-                try {
-                    // Try epoch millis
-                    startTimestamp = Long.parseLong(startTimestampIso);
-                } catch (Exception millisEx) {
-                    System.err.println("Invalid timestamp for --startTimestamp: " + startTimestampIso + ". Use ISO 8601 or epoch millis.");
-                    System.exit(1);
-                }
-            }
         }
-        // Parse --skip-header option
-
-        String skipHeaderDiffArg = getArg(args, "--skip-header", null);
-        java.util.Set<String> skipHeaderNames = null;
-        boolean disableHeaderComparison = hasArg(args, "--skip-header");
-        if (skipHeaderDiffArg != null) {
-            if (!skipHeaderDiffArg.trim().isEmpty()) {
-                skipHeaderNames = new java.util.HashSet<>();
-                for (String h : skipHeaderDiffArg.split(",")) {
-                    if (!h.trim().isEmpty()) skipHeaderNames.add(h.trim());
-                }
-            }
-        }
-        TopicCompareService service = new TopicCompareService();
-        CompareResult compareResult = service.compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, startTimestamp, skipHeaderNames, disableHeaderComparison);
         // Print summary to stderr
         System.err.println("--- Summary ---");
         System.err.println("Differences (rows): " + diffCount[0]);
