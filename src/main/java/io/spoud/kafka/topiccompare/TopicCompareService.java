@@ -13,171 +13,168 @@ import java.time.Duration;
 public class TopicCompareService {
     // Unified compareTopics implementation
     private CompareResult compareTopicsImpl(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted, Set<String> skipHeaderNames, boolean disableHeaderComparison) {
-        CompareStats statsA = null;
-        CompareStats statsB = null;
+        // Helper to create a unique string from key only (for compacted) or key+value (for normal)
+        java.util.function.BiFunction<byte[], byte[], String> keyHash = (keyBytes, valueBytes) -> {
+            if (keyBytes != null) {
+                return java.util.Base64.getEncoder().encodeToString(keyBytes);
+            } else if (valueBytes != null) {
+                return "null:" + java.util.Arrays.hashCode(valueBytes);
+            } else {
+                return "null:null";
+            }
+        };
+        // Helper to create a unique string from key, value, and timestamp for duplicate detection
+        java.util.function.Function<ConsumerRecord<byte[], byte[]>, String> duplicateKey = record -> {
+            return java.util.Base64.getEncoder().encodeToString(record.key() == null ? new byte[0] : record.key()) +
+                    ":" + java.util.Base64.getEncoder().encodeToString(record.value() == null ? new byte[0] : record.value()) +
+                    ":" + record.timestamp();
+        };
+        // Always initialize statsA and statsB with empty maps to avoid NullPointerException
+        CompareStats statsA = new CompareStats(new HashMap<>());
+        CompareStats statsB = new CompareStats(new HashMap<>());
         try (KafkaConsumer<byte[], byte[]> consumerA = new KafkaConsumer<>(propsA);
              KafkaConsumer<byte[], byte[]> consumerB = new KafkaConsumer<>(propsB)) {
-
-            consumerA.subscribe(Collections.singletonList(topicA));
-            consumerB.subscribe(Collections.singletonList(topicB));
-
-            Map<org.apache.kafka.common.TopicPartition, Long> effectiveStartOffsetsA = new HashMap<>();
-            Map<org.apache.kafka.common.TopicPartition, Long> effectiveStartOffsetsB = new HashMap<>();
+            // --- Refactored per-partition message reading for topic A ---
             Map<org.apache.kafka.common.TopicPartition, Long> lastOffsetsA = new HashMap<>();
-            Map<org.apache.kafka.common.TopicPartition, Long> lastOffsetsB = new HashMap<>();
-
-            // Seek to startTimestamp if provided
-            if (startTimestamp != null) {
-                consumerA.poll(Duration.ofMillis(100));
-                consumerB.poll(Duration.ofMillis(100));
-                Set<org.apache.kafka.common.TopicPartition> partitionsA = consumerA.assignment();
-                Set<org.apache.kafka.common.TopicPartition> partitionsB = consumerB.assignment();
-                while (partitionsA.isEmpty() || partitionsB.isEmpty()) {
-                    consumerA.poll(Duration.ofMillis(100));
-                    consumerB.poll(Duration.ofMillis(100));
-                    partitionsA = consumerA.assignment();
-                    partitionsB = consumerB.assignment();
-                }
-                Map<org.apache.kafka.common.TopicPartition, Long> timestampMapA = new HashMap<>();
-                for (org.apache.kafka.common.TopicPartition tp : partitionsA) {
-                    timestampMapA.put(tp, startTimestamp);
-                }
-                Map<org.apache.kafka.common.TopicPartition, Long> timestampMapB = new HashMap<>();
-                for (org.apache.kafka.common.TopicPartition tp : partitionsB) {
-                    timestampMapB.put(tp, startTimestamp);
-                }
-                Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.consumer.OffsetAndTimestamp> offsetsA = consumerA.offsetsForTimes(timestampMapA);
-                for (var entry : offsetsA.entrySet()) {
-                    if (entry.getValue() != null) {
-                        consumerA.seek(entry.getKey(), entry.getValue().offset());
-                        effectiveStartOffsetsA.put(entry.getKey(), entry.getValue().offset());
-                    }
-                }
-                Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.consumer.OffsetAndTimestamp> offsetsB = consumerB.offsetsForTimes(timestampMapB);
-                for (var entry : offsetsB.entrySet()) {
-                    if (entry.getValue() != null) {
-                        consumerB.seek(entry.getKey(), entry.getValue().offset());
-                        effectiveStartOffsetsB.put(entry.getKey(), entry.getValue().offset());
-                    }
-                }
-            } else {
-                for (org.apache.kafka.common.TopicPartition tp : consumerA.assignment()) {
-                    long startOffset = consumerA.beginningOffsets(Collections.singleton(tp)).get(tp);
-                    effectiveStartOffsetsA.put(tp, startOffset);
-                }
-                for (org.apache.kafka.common.TopicPartition tp : consumerB.assignment()) {
-                    long startOffset = consumerB.beginningOffsets(Collections.singleton(tp)).get(tp);
-                    effectiveStartOffsetsB.put(tp, startOffset);
-                }
-            }
-
-            statsA = new CompareStats(effectiveStartOffsetsA);
-            statsB = new CompareStats(effectiveStartOffsetsB);
-
+            Map<org.apache.kafka.common.TopicPartition, Long> effectiveStartOffsetsA = new HashMap<>();
             Map<String, ConsumerRecord<byte[], byte[]>> recordsA = new HashMap<>();
-            Map<String, ConsumerRecord<byte[], byte[]>> recordsB = new HashMap<>();
-
             Set<String> seenA = new HashSet<>();
-            Set<String> seenB = new HashSet<>();
             List<String> orderA = new ArrayList<>();
-            List<String> orderB = new ArrayList<>();
-            // Helper to create a unique string from key only (for compacted) or key+value (for normal)
-            java.util.function.BiFunction<byte[], byte[], String> keyHash = (keyBytes, valueBytes) -> {
-                if (keyBytes != null) {
-                    return java.util.Base64.getEncoder().encodeToString(keyBytes);
-                } else if (valueBytes != null) {
-                    return "null:" + java.util.Arrays.hashCode(valueBytes);
+            org.apache.kafka.common.TopicPartition[] partitionsA = consumerA.partitionsFor(topicA).stream()
+                    .map(p -> new org.apache.kafka.common.TopicPartition(topicA, p.partition()))
+                    .toArray(org.apache.kafka.common.TopicPartition[]::new);
+            for (org.apache.kafka.common.TopicPartition partition : partitionsA) {
+                consumerA.assign(Collections.singletonList(partition));
+                long startOffset;
+                if (startTimestamp != null) {
+                    Map<org.apache.kafka.common.TopicPartition, Long> timestampMap = Map.of(partition, startTimestamp);
+                    var offsets = consumerA.offsetsForTimes(timestampMap);
+                    var offsetAndTimestamp = offsets.get(partition);
+                    if (offsetAndTimestamp != null) {
+                        startOffset = offsetAndTimestamp.offset();
+                        consumerA.seek(partition, startOffset);
+                    } else {
+                        startOffset = consumerA.beginningOffsets(Collections.singleton(partition)).get(partition);
+                        consumerA.seek(partition, startOffset);
+                    }
                 } else {
-                    return "null:null";
+                    startOffset = consumerA.beginningOffsets(Collections.singleton(partition)).get(partition);
+                    consumerA.seek(partition, startOffset);
                 }
-            };
-            // Helper to create a unique string from key, value, and timestamp for duplicate detection
-            java.util.function.Function<ConsumerRecord<byte[], byte[]>, String> duplicateKey = record -> {
-                return java.util.Base64.getEncoder().encodeToString(record.key() == null ? new byte[0] : record.key()) +
-                        ":" + java.util.Base64.getEncoder().encodeToString(record.value() == null ? new byte[0] : record.value()) +
-                        ":" + record.timestamp();
-            };
-            boolean reachedEndA = false;
-            boolean reachedEndB = false;
-            long lastTimestampA = -1;
-            long lastTimestampB = -1;
-            boolean monotonicTimestampsA = true;
-            boolean monotonicTimestampsB = true;
-            // Read messages from topic A
-            int countA = 0;
-            while (countA < maxMessages) {
-                var records = consumerA.poll(Duration.ofSeconds(1));
-                if (records.isEmpty()) {
-                    reachedEndA = true;
-                    break;
-                }
-                for (var record : records) {
-                    String key = keyHash.apply(record.key(), compacted ? null : record.value());
-                    if (lastTimestampA > record.timestamp()) {
-                        monotonicTimestampsA = false;
+                effectiveStartOffsetsA.put(partition, startOffset);
+                long lastTimestamp = -1;
+                boolean monotonicTimestamps = true;
+                int count = 0;
+                boolean reachedEnd = false;
+                while (count < maxMessages) {
+                    var records = consumerA.poll(Duration.ofSeconds(1));
+                    if (records.isEmpty()) {
+                        reachedEnd = true;
+                        break;
                     }
-                    lastTimestampA = record.timestamp();
-                    lastOffsetsA.put(new org.apache.kafka.common.TopicPartition(record.topic(), record.partition()), record.offset());
-                    if (compacted) {
-                        recordsA.put(key, record);
-                        if (!seenA.contains(key)) orderA.add(key);
-                        seenA.add(key);
-                    } else {
-                        String dupKey = duplicateKey.apply(record);
-                        if (seenA.contains(dupKey)) {
-                            logger.log(new Difference(Difference.Type.DUPLICATE_IN_A, record, null, key, recordsA.get(dupKey)));
-                        } else {
-                            seenA.add(dupKey);
-                            recordsA.put(dupKey, record);
-                            orderA.add(dupKey);
+                    for (var record : records) {
+                        if (record.partition() != partition.partition()) continue;
+                        String key = keyHash.apply(record.key(), compacted ? null : record.value());
+                        if (lastTimestamp > record.timestamp()) {
+                            monotonicTimestamps = false;
                         }
+                        lastTimestamp = record.timestamp();
+                        lastOffsetsA.put(partition, record.offset());
+                        if (compacted) {
+                            recordsA.put(key, record);
+                            if (!seenA.contains(key)) orderA.add(key);
+                            seenA.add(key);
+                        } else {
+                            String dupKey = duplicateKey.apply(record);
+                            if (seenA.contains(dupKey)) {
+                                logger.log(new Difference(Difference.Type.DUPLICATE_IN_A, record, null, key, recordsA.get(dupKey)));
+                            } else {
+                                seenA.add(dupKey);
+                                recordsA.put(dupKey, record);
+                                orderA.add(dupKey);
+                            }
+                        }
+                        count++;
+                        if (count >= maxMessages) break;
                     }
-                    countA++;
-                    if (countA >= maxMessages) break;
                 }
+                statsA.endReached.put(partition, reachedEnd);
+                statsA.eventsRead.put(partition, count);
+                statsA.timestampsMonotonous.put(partition, monotonicTimestamps);
             }
-            statsA.endReached = reachedEndA;
-            statsA.eventsRead = countA;
-            statsA.timestampsMonotonous = monotonicTimestampsA;
             statsA.endOffsets = new HashMap<>(lastOffsetsA);
+            statsA.startOffsets = new HashMap<>(effectiveStartOffsetsA);
 
-            // Read messages from topic B
-            int countB = 0;
-            while (countB < maxMessages) {
-                var records = consumerB.poll(Duration.ofSeconds(1));
-                if (records.isEmpty()) {
-                    reachedEndB = true;
-                    break;
-                }
-                for (var record : records) {
-                    String key = keyHash.apply(record.key(), compacted ? null : record.value());
-                    if (lastTimestampB > record.timestamp()) {
-                        monotonicTimestampsB = false;
-                    }
-                    lastTimestampB = record.timestamp();
-                    lastOffsetsB.put(new org.apache.kafka.common.TopicPartition(record.topic(), record.partition()), record.offset());
-                    if (compacted) {
-                        recordsB.put(key, record);
-                        if (!seenB.contains(key)) orderB.add(key);
-                        seenB.add(key);
+            // --- Refactored per-partition message reading for topic B ---
+            Map<org.apache.kafka.common.TopicPartition, Long> lastOffsetsB = new HashMap<>();
+            Map<org.apache.kafka.common.TopicPartition, Long> effectiveStartOffsetsB = new HashMap<>();
+            Map<String, ConsumerRecord<byte[], byte[]>> recordsB = new HashMap<>();
+            Set<String> seenB = new HashSet<>();
+            List<String> orderB = new ArrayList<>();
+            org.apache.kafka.common.TopicPartition[] partitionsB = consumerB.partitionsFor(topicB).stream()
+                    .map(p -> new org.apache.kafka.common.TopicPartition(topicB, p.partition()))
+                    .toArray(org.apache.kafka.common.TopicPartition[]::new);
+            for (org.apache.kafka.common.TopicPartition partition : partitionsB) {
+                consumerB.assign(Collections.singletonList(partition));
+                long startOffset;
+                if (startTimestamp != null) {
+                    Map<org.apache.kafka.common.TopicPartition, Long> timestampMap = Map.of(partition, startTimestamp);
+                    var offsets = consumerB.offsetsForTimes(timestampMap);
+                    var offsetAndTimestamp = offsets.get(partition);
+                    if (offsetAndTimestamp != null) {
+                        startOffset = offsetAndTimestamp.offset();
+                        consumerB.seek(partition, startOffset);
                     } else {
-                        String dupKey = duplicateKey.apply(record);
-                        if (seenB.contains(dupKey)) {
-                            logger.log(new Difference(Difference.Type.DUPLICATE_IN_B, null, record, key, recordsB.get(dupKey)));
-                        } else {
-                            seenB.add(dupKey);
-                            recordsB.put(dupKey, record);
-                            orderB.add(dupKey);
-                        }
+                        startOffset = consumerB.beginningOffsets(Collections.singleton(partition)).get(partition);
+                        consumerB.seek(partition, startOffset);
                     }
-                    countB++;
-                    if (countB >= maxMessages) break;
+                } else {
+                    startOffset = consumerB.beginningOffsets(Collections.singleton(partition)).get(partition);
+                    consumerB.seek(partition, startOffset);
                 }
+                effectiveStartOffsetsB.put(partition, startOffset);
+                long lastTimestamp = -1;
+                boolean monotonicTimestamps = true;
+                int count = 0;
+                boolean reachedEnd = false;
+                while (count < maxMessages) {
+                    var records = consumerB.poll(Duration.ofSeconds(1));
+                    if (records.isEmpty()) {
+                        reachedEnd = true;
+                        break;
+                    }
+                    for (var record : records) {
+                        if (record.partition() != partition.partition()) continue;
+                        String key = keyHash.apply(record.key(), compacted ? null : record.value());
+                        if (lastTimestamp > record.timestamp()) {
+                            monotonicTimestamps = false;
+                        }
+                        lastTimestamp = record.timestamp();
+                        lastOffsetsB.put(partition, record.offset());
+                        if (compacted) {
+                            recordsB.put(key, record);
+                            if (!seenB.contains(key)) orderB.add(key);
+                            seenB.add(key);
+                        } else {
+                            String dupKey = duplicateKey.apply(record);
+                            if (seenB.contains(dupKey)) {
+                                logger.log(new Difference(Difference.Type.DUPLICATE_IN_B, null, record, key, recordsB.get(dupKey)));
+                            } else {
+                                seenB.add(dupKey);
+                                recordsB.put(dupKey, record);
+                                orderB.add(dupKey);
+                            }
+                        }
+                        count++;
+                        if (count >= maxMessages) break;
+                    }
+                }
+                statsB.endReached.put(partition, reachedEnd);
+                statsB.eventsRead.put(partition, count);
+                statsB.timestampsMonotonous.put(partition, monotonicTimestamps);
             }
-            statsB.endReached = reachedEndB;
-            statsB.eventsRead = countB;
-            statsB.timestampsMonotonous = monotonicTimestampsB;
             statsB.endOffsets = new HashMap<>(lastOffsetsB);
+            statsB.startOffsets = new HashMap<>(effectiveStartOffsetsB);
 
             // Compare
             Set<String> allKeys = new HashSet<>();
@@ -217,19 +214,30 @@ public class TopicCompareService {
                 if (inA && inB) {
                     ConsumerRecord<byte[], byte[]> recA = recordsA.get(key);
                     ConsumerRecord<byte[], byte[]> recB = recordsB.get(key);
-                    if (!headersEqual(recA, recB, skipHeaderNames, disableHeaderComparison)) {
+                    // Check for different partition
+                    if (recA.partition() != recB.partition()) {
+                        logger.log(new Difference(Difference.Type.DIFFERENT_PARTITION, recA, recB, key));
+                        continue;
+                    }
+                    // For compacted topics, compare values as well
+                    if (compacted) {
+                        if (!Arrays.equals(recA.value(), recB.value())) {
+                            logger.log(new Difference(Difference.Type.ONLY_IN_A, recA, null, key));
+                            logger.log(new Difference(Difference.Type.ONLY_IN_B, null, recB, key));
+                        }
+                    } else if (!headersEqual(recA, recB, skipHeaderNames, disableHeaderComparison)) {
                         if (!disableHeaderComparison) {
                             logger.log(new Difference(Difference.Type.HEADER_DIFFERENCE, recA, recB, key));
                         }
                     }
                 } else if (inA && !inB) {
-                    if (missingAtEndA.contains(key)) {
+                    if (!compacted && missingAtEndA.contains(key)) {
                         logger.log(new Difference(Difference.Type.MISSING_AT_END, recordsA.get(key), null, key));
                     } else {
                         logger.log(new Difference(Difference.Type.ONLY_IN_A, recordsA.get(key), null, key));
                     }
                 } else if (!inA && inB) {
-                    if (missingAtEndB.contains(key)) {
+                    if (!compacted && missingAtEndB.contains(key)) {
                         logger.log(new Difference(Difference.Type.MISSING_AT_END, null, recordsB.get(key), key));
                     } else {
                         logger.log(new Difference(Difference.Type.ONLY_IN_B, null, recordsB.get(key), key));
@@ -249,7 +257,6 @@ public class TopicCompareService {
                     }
                 }
             }
-
         }
         return new CompareResult(statsA, statsB);
     }

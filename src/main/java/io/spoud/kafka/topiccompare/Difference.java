@@ -10,7 +10,8 @@ public class Difference {
         DUPLICATE_IN_B,
         HEADER_DIFFERENCE,
         OUT_OF_ORDER,
-        MISSING_AT_END // New state for messages only at the end
+        MISSING_AT_END, // messages only at the end
+        DIFFERENT_PARTITION // messages with same key but different partition
     }
 
     private final Type type;

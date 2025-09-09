@@ -843,4 +843,129 @@ public class TopicCompareServiceTest {
         assert duplicatesA == 0 : "Should not report duplicates in A for same key with different timestamps, got " + duplicatesA;
         assert duplicatesB == 0 : "Should not report duplicates in B for same key with different timestamps, got " + duplicatesB;
     }
+
+    @Test
+    void testMultiPartitionTopicMaxMessagesPerPartition() throws Exception {
+        String topicA = "multi-part-a";
+        String topicB = "multi-part-b";
+        int partitions = 4;
+        int messagesPerPartition = 10;
+        int maxMessages = 8; // Less than total messages, to test per-partition logic
+        // Create topics with 4 partitions
+        createTopicWithProperties(kafkaA.getBootstrapServers(), topicA, partitions, (short)1, Collections.emptyMap());
+        createTopicWithProperties(kafkaB.getBootstrapServers(), topicB, partitions, (short)1, Collections.emptyMap());
+        Thread.sleep(500); // Wait for topics to be created
+        // Produce messages to each partition on both clusters
+        Properties prodPropsA = new Properties();
+        prodPropsA.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaA.getBootstrapServers());
+        prodPropsA.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsA.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        Properties prodPropsB = new Properties();
+        prodPropsB.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaB.getBootstrapServers());
+        prodPropsB.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsB.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        try (KafkaProducer<byte[], byte[]> producerA = new KafkaProducer<>(prodPropsA);
+             KafkaProducer<byte[], byte[]> producerB = new KafkaProducer<>(prodPropsB)) {
+            for (int p = 0; p < partitions; p++) {
+                for (int i = 0; i < messagesPerPartition; i++) {
+                    byte[] key = new byte[]{(byte)p, (byte)i};
+                    byte[] valueA = new byte[]{(byte)(100 + i)};
+                    byte[] valueB = new byte[]{(byte)(100 + i)};
+                    // Make one value different in B for partition 2, index 5
+                    if (p == 2 && i == 5) valueB = new byte[]{(byte)200};
+                    producerA.send(new ProducerRecord<>(topicA, p, (long)i, key, valueA));
+                    producerB.send(new ProducerRecord<>(topicB, p, (long)i, key, valueB));
+                }
+            }
+            producerA.flush();
+            producerB.flush();
+        }
+        Thread.sleep(500); // Wait for messages to be available
+        Properties propsA = new Properties();
+        propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
+        propsA.put("group.id", "multi-part-a");
+        propsA.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("auto.offset.reset", "earliest");
+        Properties propsB = new Properties();
+        propsB.put("bootstrap.servers", kafkaB.getBootstrapServers());
+        propsB.put("group.id", "multi-part-b");
+        propsB.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("auto.offset.reset", "earliest");
+        CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, maxMessages, logger, null);
+        // There should be one ONLY_IN_A and one ONLY_IN_B for the differing message
+        long onlyInA = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_A).count();
+        long onlyInB = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.ONLY_IN_B).count();
+        assert onlyInA == 1 : "Expected 1 ONLY_IN_A for differing message, got " + onlyInA;
+        assert onlyInB == 1 : "Expected 1 ONLY_IN_B for differing message, got " + onlyInB;
+        // Check that no more than maxMessages messages were fetched in total
+        long totalCompared = logger.getDifferences().size();
+        assert totalCompared <= maxMessages * partitions : "Should not fetch more than maxMessages per partition. Got " + totalCompared;
+    }
+
+    @Test
+    void testMultiPartitionEventOnDifferentPartitionInClusterB() throws Exception {
+        String topicA = "multi-partition-test-a";
+        String topicB = "multi-partition-test-b";
+        int partitions = 3;
+        int messagesPerPartition = 4;
+        // Create topics with 3 partitions on both clusters
+        try (AdminClient adminA = AdminClient.create(Collections.singletonMap("bootstrap.servers", kafkaA.getBootstrapServers()));
+             AdminClient adminB = AdminClient.create(Collections.singletonMap("bootstrap.servers", kafkaB.getBootstrapServers()))) {
+            adminA.createTopics(Collections.singleton(new NewTopic(topicA, partitions, (short)1))).all().get();
+            adminB.createTopics(Collections.singleton(new NewTopic(topicB, partitions, (short)1))).all().get();
+        }
+        Properties propsA = new Properties();
+        propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
+        propsA.put("key.serializer", ByteArraySerializer.class.getName());
+        propsA.put("value.serializer", ByteArraySerializer.class.getName());
+        KafkaProducer<byte[], byte[]> producerA = new KafkaProducer<>(propsA);
+        Properties propsB = new Properties();
+        propsB.put("bootstrap.servers", kafkaB.getBootstrapServers());
+        propsB.put("key.serializer", ByteArraySerializer.class.getName());
+        propsB.put("value.serializer", ByteArraySerializer.class.getName());
+        KafkaProducer<byte[], byte[]> producerB = new KafkaProducer<>(propsB);
+        // Produce messages to both clusters, but for one key, send to a different partition in B
+        for (int p = 0; p < partitions; p++) {
+            for (int i = 0; i < messagesPerPartition; i++) {
+                byte[] key = ("key-" + p + "-" + i).getBytes();
+                byte[] value = ("value-" + p + "-" + i).getBytes();
+                producerA.send(new ProducerRecord<>(topicA, p, (long)i, key, value));
+                int partitionB = (p == 1 && i == 2) ? 2 : p; // For key-1-2, send to partition 2 in B instead of 1
+                producerB.send(new ProducerRecord<>(topicB, partitionB, (long)i, key, value));
+            }
+        }
+        producerA.flush();
+        producerB.flush();
+        Thread.sleep(500); // Wait for messages to be available
+        Properties consumerPropsA = new Properties();
+        consumerPropsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
+        consumerPropsA.put("group.id", "multi-partition-test-a");
+        consumerPropsA.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        consumerPropsA.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        consumerPropsA.put("auto.offset.reset", "earliest");
+        Properties consumerPropsB = new Properties();
+        consumerPropsB.put("bootstrap.servers", kafkaB.getBootstrapServers());
+        consumerPropsB.put("group.id", "multi-partition-test-b");
+        consumerPropsB.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        consumerPropsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        consumerPropsB.put("auto.offset.reset", "earliest");
+        CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
+        new TopicCompareService().compareTopics(
+            consumerPropsA, topicA,
+            consumerPropsB, topicB,
+            20, logger, null
+        );
+        // There should be a DIFFERENT_PARTITION difference for key-1-2
+        boolean found = logger.getDifferences().stream().anyMatch(d -> {
+            if (d.getType() != Difference.Type.DIFFERENT_PARTITION) return false;
+            byte[] key = null;
+            if (d.getRecordA() != null) key = d.getRecordA().key();
+            else if (d.getRecordB() != null) key = d.getRecordB().key();
+            return key != null && new String(key).equals("key-1-2");
+        });
+        assert found : "Expected a DIFFERENT_PARTITION difference for key-1-2";
+    }
 }
