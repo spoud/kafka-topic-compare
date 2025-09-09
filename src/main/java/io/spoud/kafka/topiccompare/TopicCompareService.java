@@ -40,6 +40,8 @@ public class TopicCompareService {
             Map<String, ConsumerRecord<byte[], byte[]>> recordsA = new HashMap<>();
             Set<String> seenA = new HashSet<>();
             List<String> orderA = new ArrayList<>();
+            // Track partitions for each key in A
+            Map<String, Set<Integer>> keyPartitionsA = new HashMap<>();
             org.apache.kafka.common.TopicPartition[] partitionsA = consumerA.partitionsFor(topicA).stream()
                     .map(p -> new org.apache.kafka.common.TopicPartition(topicA, p.partition()))
                     .toArray(org.apache.kafka.common.TopicPartition[]::new);
@@ -75,6 +77,8 @@ public class TopicCompareService {
                     for (var record : records) {
                         if (record.partition() != partition.partition()) continue;
                         String key = keyHash.apply(record.key(), compacted ? null : record.value());
+                        // Track partitions for this key
+                        keyPartitionsA.computeIfAbsent(key, k -> new HashSet<>()).add(partition.partition());
                         if (lastTimestamp > record.timestamp()) {
                             monotonicTimestamps = false;
                         }
@@ -246,13 +250,28 @@ public class TopicCompareService {
             }
 
             if (!compacted) {
-                // Out-of-order detection (not relevant for compacted topics)
-                for (String key : allKeys) {
-                    if (recordsA.containsKey(key) && recordsB.containsKey(key)) {
-                        int idxA = orderA.indexOf(key);
+                // Out-of-order detection: compare order of keys as they appear in both topics
+                // Check A vs B
+                int lastIdxB = -1;
+                for (String key : orderA) {
+                    if (recordsB.containsKey(key)) {
                         int idxB = orderB.indexOf(key);
-                        if (idxA != -1 && idxB != -1 && idxA != idxB) {
+                        if (idxB < lastIdxB) {
                             logger.log(new Difference(Difference.Type.OUT_OF_ORDER, recordsA.get(key), recordsB.get(key), key));
+                        } else {
+                            lastIdxB = idxB;
+                        }
+                    }
+                }
+                // Check B vs A (to catch all out-of-order cases)
+                int lastIdxA = -1;
+                for (String key : orderB) {
+                    if (recordsA.containsKey(key)) {
+                        int idxA = orderA.indexOf(key);
+                        if (idxA < lastIdxA) {
+                            logger.log(new Difference(Difference.Type.OUT_OF_ORDER, recordsA.get(key), recordsB.get(key), key));
+                        } else {
+                            lastIdxA = idxA;
                         }
                     }
                 }

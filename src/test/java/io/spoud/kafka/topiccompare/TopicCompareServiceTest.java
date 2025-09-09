@@ -550,7 +550,8 @@ public class TopicCompareServiceTest {
                 rotated.add(i);
             }
             java.util.Collections.rotate(rotated, 1); // rotate by 1 to ensure all are out of order
-            for (int i : rotated) {
+            for (int idx = 0; idx < rotated.size(); idx++) {
+                int i = rotated.get(idx);
                 byte[] key = new byte[]{(byte)(i >>> 24), (byte)(i >>> 16), (byte)(i >>> 8), (byte)i};
                 byte[] value = new byte[]{(byte)(i % 256)};
                 produceTestMessage(producerB, topicB, key, value, ts + i);
@@ -571,6 +572,92 @@ public class TopicCompareServiceTest {
         Properties propsB = new Properties();
         propsB.put("bootstrap.servers", kafkaB.getBootstrapServers());
         propsB.put("group.id", "outoforder-b");
+        propsB.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsB.put("auto.offset.reset", "earliest");
+        CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
+        new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, total, logger, null);
+        long outOfOrder = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.OUT_OF_ORDER).count();
+        assert outOfOrder == shuffleCount : "Expected " + shuffleCount + " OUT_OF_ORDER, got " + outOfOrder;
+    }
+
+    @Test
+    void testOutOfOrderEventsWithExtraEvents() {
+        String topicA = "outoforder-extra-a";
+        String topicB = "outoforder-extra-b";
+        long ts = System.currentTimeMillis();
+        int total = 10_000;
+        int shuffleStart = 4950;
+        int shuffleCount = 50;
+        int extraBefore = 10;
+        int extraInShuffle = 5;
+        Properties prodPropsA = new Properties();
+        prodPropsA.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaA.getBootstrapServers());
+        prodPropsA.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsA.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        Properties prodPropsB = new Properties();
+        prodPropsB.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaB.getBootstrapServers());
+        prodPropsB.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodPropsB.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        try (KafkaProducer<byte[], byte[]> producerA = new KafkaProducer<>(prodPropsA);
+             KafkaProducer<byte[], byte[]> producerB = new KafkaProducer<>(prodPropsB)) {
+            // Produce all events in order to topicA
+            for (int i = 0; i < total; i++) {
+                byte[] key = new byte[]{(byte)(i >>> 24), (byte)(i >>> 16), (byte)(i >>> 8), (byte)i};
+                byte[] value = new byte[]{(byte)(i % 256)};
+                produceTestMessage(producerA, topicA, key, value, ts + i);
+            }
+            // Produce events to topicB: before shuffle range
+            for (int i = 0; i < shuffleStart; i++) {
+                byte[] key = new byte[]{(byte)(i >>> 24), (byte)(i >>> 16), (byte)(i >>> 8), (byte)i};
+                byte[] value = new byte[]{(byte)(i % 256)};
+                produceTestMessage(producerB, topicB, key, value, ts + i);
+            }
+            // Add extra events before shuffle range in B
+            for (int i = 0; i < extraBefore; i++) {
+                int fake = 100_000 + i;
+                byte[] key = new byte[]{(byte)(fake >>> 24), (byte)(fake >>> 16), (byte)(fake >>> 8), (byte)fake};
+                byte[] value = new byte[]{(byte)(fake % 256)};
+                produceTestMessage(producerB, topicB, key, value, ts + fake);
+            }
+            // Collect and rotate the middle 50 events (guaranteed all out of order)
+            java.util.List<Integer> rotated = new java.util.ArrayList<>();
+            for (int i = shuffleStart; i < shuffleStart + shuffleCount; i++) {
+                rotated.add(i);
+            }
+            java.util.Collections.rotate(rotated, 1); // rotate by 1 to ensure all are out of order
+            int mid = rotated.size() / 2;
+            for (int idx = 0; idx < rotated.size(); idx++) {
+                int i = rotated.get(idx);
+                // In the middle, insert extra events in B
+                if (idx == mid) {
+                    for (int j = 0; j < extraInShuffle; j++) {
+                        int fake = 200_000 + j;
+                        byte[] key = new byte[]{(byte)(fake >>> 24), (byte)(fake >>> 16), (byte)(fake >>> 8), (byte)fake};
+                        byte[] value = new byte[]{(byte)(fake % 256)};
+                        produceTestMessage(producerB, topicB, key, value, ts + fake);
+                    }
+                }
+                byte[] key = new byte[]{(byte)(i >>> 24), (byte)(i >>> 16), (byte)(i >>> 8), (byte)i};
+                byte[] value = new byte[]{(byte)(i % 256)};
+                produceTestMessage(producerB, topicB, key, value, ts + i);
+            }
+            // Produce remaining events in order
+            for (int i = shuffleStart + shuffleCount; i < total; i++) {
+                byte[] key = new byte[]{(byte)(i >>> 24), (byte)(i >>> 16), (byte)(i >>> 8), (byte)i};
+                byte[] value = new byte[]{(byte)(i % 256)};
+                produceTestMessage(producerB, topicB, key, value, ts + i);
+            }
+        }
+        Properties propsA = new Properties();
+        propsA.put("bootstrap.servers", kafkaA.getBootstrapServers());
+        propsA.put("group.id", "outoforder-extra-a");
+        propsA.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        propsA.put("auto.offset.reset", "earliest");
+        Properties propsB = new Properties();
+        propsB.put("bootstrap.servers", kafkaB.getBootstrapServers());
+        propsB.put("group.id", "outoforder-extra-b");
         propsB.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
         propsB.put("auto.offset.reset", "earliest");
@@ -967,5 +1054,42 @@ public class TopicCompareServiceTest {
             return key != null && new String(key).equals("key-1-2");
         });
         assert found : "Expected a DIFFERENT_PARTITION difference for key-1-2";
+    }
+
+    @Test
+    void testSixPartitionTopicSelfCompareNoDifferences() throws Exception {
+        String topic = "six-partitions-test";
+        int partitions = 6;
+        int messagesPerPartition = 100;
+        int keySpace = 10;
+        // Create topic with 6 partitions
+        createTopicWithProperties(kafkaA.getBootstrapServers(), topic, partitions, (short)1, Collections.emptyMap());
+        Thread.sleep(500); // Wait for topic to be created
+        // Produce messages to each partition
+        Properties prodProps = new Properties();
+        prodProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaA.getBootstrapServers());
+        prodProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        prodProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        try (KafkaProducer<byte[], byte[]> producer = new KafkaProducer<>(prodProps)) {
+            for (int p = 0; p < partitions; p++) {
+                for (int i = 0; i < messagesPerPartition; i++) {
+                    int keyNum = i % keySpace;
+                    byte[] key = ("key-" + keyNum).getBytes();
+                    byte[] value = ("value-" + p + "-" + i).getBytes();
+                    producer.send(new ProducerRecord<>(topic, p, (long)i, key, value));
+                }
+            }
+            producer.flush();
+        }
+        Thread.sleep(500); // Wait for messages to be available
+        Properties props = new Properties();
+        props.put("bootstrap.servers", kafkaA.getBootstrapServers());
+        props.put("group.id", "six-partitions-test");
+        props.put("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        props.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        props.put("auto.offset.reset", "earliest");
+        CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
+        new TopicCompareService().compareTopics(props, topic, props, topic, partitions * messagesPerPartition, logger, null);
+        assert logger.getDifferences().isEmpty() : "Expected no differences when comparing topic to itself, got " + logger.getDifferences();
     }
 }

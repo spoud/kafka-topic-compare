@@ -10,6 +10,10 @@ public class TopicCompare implements QuarkusApplication {
 
     @Override
     public int run(String[] args) {
+        if (args == null || args.length == 0) {
+            printHelp();
+            return 0;
+        }
         if (hasArg(args, "--help")) {
             printHelp();
             return 0;
