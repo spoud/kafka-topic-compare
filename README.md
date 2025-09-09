@@ -17,6 +17,16 @@ A powerful tool for comparing or diff two Kafka topics, designed for developers 
 
 ## Installation
 
+You can download the latest release from the [Releases](https://github.com/spoud/kafka-topic-compare/releases) page or use this direct link:
+
+```bash
+curl -L https://github.com/spoud/kafka-topic-compare/releases/latest/download/kafka-topic-compare-1.0-SNAPSHOT-runner.jar -L -o kafka-topic-compare.jar
+java -jar kafka-topic-compare.jar \
+  --bootstrapA localhost:9092 --topicA topicA \
+  --bootstrapB localhost:9093 --topicB topicB \
+  --maxMessages 100
+```
+
 **Requirements:**
 - Java 17 or newer
 - Maven (or use the included `mvnw` wrapper)
