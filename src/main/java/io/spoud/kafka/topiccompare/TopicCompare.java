@@ -49,12 +49,7 @@ public class TopicCompare implements QuarkusApplication {
                 System.exit(1);
             }
         }
-        propsA.putIfAbsent("bootstrap.servers", bootstrapA);
-        propsA.putIfAbsent("group.id", "compare-a-" + System.currentTimeMillis());
-        propsA.putIfAbsent("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
-        propsA.putIfAbsent("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
-        propsA.putIfAbsent("auto.offset.reset", "earliest");
-        propsA.put("enable.auto.commit", "false");
+        applyDefaultConsumerProps(propsA, bootstrapA, "compare-a-" + System.currentTimeMillis());
 
         Properties propsB = new Properties();
         if (clientPropsBPath != null) {
@@ -65,12 +60,7 @@ public class TopicCompare implements QuarkusApplication {
                 System.exit(1);
             }
         }
-        propsB.putIfAbsent("bootstrap.servers", bootstrapB);
-        propsB.putIfAbsent("group.id", "compare-b-" + System.currentTimeMillis());
-        propsB.putIfAbsent("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
-        propsB.putIfAbsent("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
-        propsB.putIfAbsent("auto.offset.reset", "earliest");
-        propsB.put("enable.auto.commit", "false");
+        applyDefaultConsumerProps(propsB, bootstrapB, "compare-b-" + System.currentTimeMillis());
 
         System.err.println("--- kafka-topic-compare configuration ---");
         System.err.println("Topic A: " + topicA + ", Bootstrap: " + propsA.getProperty("bootstrap.servers") + ", Properties: " + (clientPropsAPath != null ? clientPropsAPath : "(default)"));
@@ -263,6 +253,15 @@ public class TopicCompare implements QuarkusApplication {
         System.err.println("B: eventsRead=" + compareResult.statsB.eventsRead + ", endReached=" + compareResult.statsB.endReached + ", timestampsMonotonous=" + compareResult.statsB.timestampsMonotonous);
         System.err.println("----------------");
         return 0;
+    }
+
+    private static void applyDefaultConsumerProps(Properties props, String bootstrapServers, String groupId) {
+        props.putIfAbsent("bootstrap.servers", bootstrapServers);
+        props.putIfAbsent("group.id", groupId);
+        props.putIfAbsent("key.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        props.putIfAbsent("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer");
+        props.putIfAbsent("auto.offset.reset", "earliest");
+        props.put("enable.auto.commit", "false");
     }
 
     private static boolean hasArg(String[] args, String name) {
