@@ -1,13 +1,15 @@
 package io.spoud.kafka.topiccompare;
 
+import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeAll;
-import org.testcontainers.containers.KafkaContainer;
-import org.testcontainers.utility.DockerImageName;
+import org.testcontainers.kafka.KafkaContainer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
+
+import java.time.Duration;
 import java.util.Properties;
 
 import org.apache.kafka.clients.admin.AdminClient;
@@ -22,8 +24,8 @@ public class TopicCompareServiceTest {
 
     @BeforeAll
     static void setup() {
-        kafkaA = new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.2.1"));
-        kafkaB = new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.2.1"));
+        kafkaA = new KafkaContainer("apache/kafka-native");
+        kafkaB = new KafkaContainer("apache/kafka-native");
         kafkaA.start();
         kafkaB.start();
     }
@@ -46,13 +48,30 @@ public class TopicCompareServiceTest {
         return props;
     }
 
+    // Wait until the topic has at least the expected number of messages
+    private void waitForMessages(String bootstrapServers, String topic, int expectedCount, long timeoutMillis) {
+        Properties props = consumerProps(bootstrapServers, "wait-group-" + System.nanoTime());
+        try (KafkaConsumer<byte[], byte[]> consumer = new KafkaConsumer<>(props)) {
+            consumer.subscribe(Collections.singletonList(topic));
+            long start = System.currentTimeMillis();
+            int total = 0;
+            while (System.currentTimeMillis() - start < timeoutMillis) {
+                var records = consumer.poll(Duration.ofMillis(200));
+                total += records.count();
+                if (total >= expectedCount) return;
+            }
+            throw new AssertionError("Timeout waiting for " + expectedCount + " messages in topic " + topic + ", only got " + total);
+        }
+    }
+
     @Test
     void testCompareTopicsWithDifferences() {
         String topicA = "test-topic-a";
         String topicB = "test-topic-b";
         produceTestMessages(kafkaA.getBootstrapServers(), topicA, new int[]{1,2,3,4});
         produceTestMessages(kafkaB.getBootstrapServers(), topicB, new int[]{3,4,5,6});
-        try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 4, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 4, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "test-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "test-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -104,6 +123,8 @@ public class TopicCompareServiceTest {
         byte[] value = new byte[]{10};
         produceTestMessage(kafkaA.getBootstrapServers(), topicA, key, value, ts);
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, key, value, ts);
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 1, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 1, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "identical-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "identical-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -118,7 +139,8 @@ public class TopicCompareServiceTest {
         // A: 1,2,3,4,5; B: 1,2,4,5 (3 is missing in B)
         produceTestMessages(kafkaA.getBootstrapServers(), topicA, new int[]{1,2,3,4,5});
         produceTestMessages(kafkaB.getBootstrapServers(), topicB, new int[]{1,2,4,5});
-        try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 5, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 4, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "extra-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "extra-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -134,7 +156,8 @@ public class TopicCompareServiceTest {
         // A: 1,2,4,5; B: 1,2,3,4,5 (3 is missing in A)
         produceTestMessages(kafkaA.getBootstrapServers(), topicA, new int[]{1,2,4,5});
         produceTestMessages(kafkaB.getBootstrapServers(), topicB, new int[]{1,2,3,4,5});
-        try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 4, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 5, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "extra2-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "extra2-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -154,7 +177,8 @@ public class TopicCompareServiceTest {
         // Unique in B
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, new byte[]{2}, new byte[]{20}, ts);
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, new byte[]{3}, new byte[]{11}, ts);
-        try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 2, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 2, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "unique-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "unique-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -177,6 +201,8 @@ public class TopicCompareServiceTest {
         produceTestMessage(kafkaA.getBootstrapServers(), topicA, key, value, ts);
         // Also produce to B for matching
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, key, value, ts);
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 2, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 1, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "dup-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "dup-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -197,6 +223,8 @@ public class TopicCompareServiceTest {
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, key, value, ts);
         // Also produce to A for matching
         produceTestMessage(kafkaA.getBootstrapServers(), topicA, key, value, ts);
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 1, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 2, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "dup2-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "dup2-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -214,6 +242,8 @@ public class TopicCompareServiceTest {
         // Null key in both
         produceTestMessage(kafkaA.getBootstrapServers(), topicA, null, value, ts);
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, null, value, ts);
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 1, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 1, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "nullkey-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "nullkey-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -236,7 +266,8 @@ public class TopicCompareServiceTest {
         produceTestMessage(kafkaA.getBootstrapServers(), topicA, key2, value, ts3);
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, key, value, ts2);
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, key2, value, ts3);
-        try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 2, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 2, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "skt-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "skt-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -267,6 +298,8 @@ public class TopicCompareServiceTest {
         byte[] value = new byte[]{70};
         produceTestMessage(kafkaA.getBootstrapServers(), topicA, key, value, ts);
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, key, value, ts);
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 1, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 1, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "bin-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "bin-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -290,6 +323,8 @@ public class TopicCompareServiceTest {
                 produceTestMessage(producerB, topicB, key, value, ts);
             }
         }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 100, 10000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 100, 10000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "large-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "large-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -310,7 +345,8 @@ public class TopicCompareServiceTest {
         produceTestMessageWithHeader(kafkaA.getBootstrapServers(), topicA, key, value, ts, "foo", new byte[]{1});
         // Produce to B with header foo=baz
         produceTestMessageWithHeader(kafkaB.getBootstrapServers(), topicB, key, value, ts, "foo", new byte[]{2});
-        try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 1, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 1, 5000);
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         long headerDiffs = logger.getDifferences().stream().filter(d -> d.getType() == Difference.Type.HEADER_DIFFERENCE).count();
@@ -357,6 +393,8 @@ public class TopicCompareServiceTest {
                 produceTestMessage(producerB, topicB, key, value, ts + i);
             }
         }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, total, 20_000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, total + duplicateCount, 20_000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "highvol-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "highvol-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -414,6 +452,8 @@ public class TopicCompareServiceTest {
                 produceTestMessage(producerB, topicB, key, value, ts + i);
             }
         }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, total, 10_000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, total, 10_000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "outoforder-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "outoforder-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -484,6 +524,8 @@ public class TopicCompareServiceTest {
                 produceTestMessage(producerB, topicB, key, value, ts + i);
             }
         }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, total, 10_000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, total + extraBefore + extraInShuffle, 10_000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "outoforder-extra-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "outoforder-extra-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -510,6 +552,8 @@ public class TopicCompareServiceTest {
                 produceTestMessage(producerB, topicB, key, value, ts);
             }
         }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, total, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, total, 5000);
         // Use a start timestamp that skips the first 5 messages
         long startTs = baseTs + 5 * 1000;
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "timestamp-a");
@@ -539,6 +583,8 @@ public class TopicCompareServiceTest {
             produceTestMessage(kafkaA.getBootstrapServers(), topicA, key, value, baseTs + i * 1000);
             produceTestMessage(kafkaB.getBootstrapServers(), topicB, key, value, baseTs + i * 1000);
         }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 30, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 10, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "offsets-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "offsets-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -569,6 +615,9 @@ public class TopicCompareServiceTest {
             if (i != 25)
                 produceTestMessage(kafkaB.getBootstrapServers(), topicB, key, valueB, baseTs + i * 1000);
         }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 9, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 9, 5000);
+        // Now compare with start timestamp, should report exactly one difference (the differing message)
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "offsets-diff-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "offsets-diff-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -627,7 +676,7 @@ public class TopicCompareServiceTest {
             )
         );
         // Give Kafka a moment to create the topic
-        Thread.sleep(500);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 0, 5000);
         // Produce messages with duplicate keys
         // Key 1: value 10, then 20 (should compact to 20)
         // Key 2: value 30 (should remain)
@@ -646,7 +695,8 @@ public class TopicCompareServiceTest {
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, key1, value20, ts+1);
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, key2, value30, ts+2);
         // Wait for compaction to run on clusterB
-        Thread.sleep(2000);
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 3, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 3, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "compacted-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "compacted-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -659,7 +709,8 @@ public class TopicCompareServiceTest {
         produceTestMessage(kafkaA.getBootstrapServers(), topicA, key3, new byte[]{99}, ts+3);
         produceTestMessage(kafkaB.getBootstrapServers(), topicB, key3, new byte[]{99}, ts+3);
 
-        Thread.sleep(500);
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 4, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 4, 5000);
         logger = new CollectingDifferenceLogger();
         new TopicCompareService().compareTopics(propsA, topicA, propsB, topicB, 10, logger, null);
         boolean found = logger.getDifferences().stream().anyMatch(d -> d.getType() == Difference.Type.ONLY_IN_A);
@@ -684,6 +735,8 @@ public class TopicCompareServiceTest {
         try (KafkaProducer<byte[], byte[]> producerB = new KafkaProducer<>(prodPropsB)) {
             produceTestMessage(producerB, topicB, key, value, ts);
         }
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, 2, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, 1, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "timestamp-key-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "timestamp-key-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -724,7 +777,8 @@ public class TopicCompareServiceTest {
             producerA.flush();
             producerB.flush();
         }
-        Thread.sleep(500); // Wait for messages to be available
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, partitions * messagesPerPartition, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, partitions * messagesPerPartition, 5000);
         Properties propsA = consumerProps(kafkaA.getBootstrapServers(), "multi-part-a");
         Properties propsB = consumerProps(kafkaB.getBootstrapServers(), "multi-part-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -767,7 +821,8 @@ public class TopicCompareServiceTest {
         }
         producerA.flush();
         producerB.flush();
-        Thread.sleep(500); // Wait for messages to be available
+        waitForMessages(kafkaA.getBootstrapServers(), topicA, partitions * messagesPerPartition, 5000);
+        waitForMessages(kafkaB.getBootstrapServers(), topicB, partitions * messagesPerPartition, 5000);
         Properties consumerPropsA = consumerProps(kafkaA.getBootstrapServers(), "multi-partition-test-a");
         Properties consumerPropsB = consumerProps(kafkaB.getBootstrapServers(), "multi-partition-test-b");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
@@ -809,7 +864,7 @@ public class TopicCompareServiceTest {
             }
             producer.flush();
         }
-        Thread.sleep(500); // Wait for messages to be available
+        waitForMessages(kafkaA.getBootstrapServers(), topic, partitions * messagesPerPartition, 10000);
         Properties props = consumerProps(kafkaA.getBootstrapServers(), "six-partitions-test");
         CollectingDifferenceLogger logger = new CollectingDifferenceLogger();
         new TopicCompareService().compareTopics(props, topic, props, topic, partitions * messagesPerPartition, logger, null);
