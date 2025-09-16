@@ -2,6 +2,8 @@ package io.spoud.kafka.topiccompare;
 
 import io.quarkus.runtime.QuarkusApplication;
 import io.quarkus.runtime.annotations.QuarkusMain;
+import org.apache.kafka.common.header.Header;
+import org.apache.kafka.common.header.Headers;
 
 import java.util.Properties;
 
@@ -370,10 +372,10 @@ public class TopicCompare implements QuarkusApplication {
     }
 
     // Helper to format headers as CSV or JSON
-    private static String headersToString(org.apache.kafka.common.header.Headers headers, boolean isCsv) {
+    private static String headersToString(Headers headers, boolean isCsv) {
         StringBuilder sb = new StringBuilder();
         boolean first = true;
-        for (org.apache.kafka.common.header.Header h : headers) {
+        for (Header h : headers) {
             if (!first) sb.append(isCsv ? ";" : ", ");
             sb.append(h.key()).append("=");
             sb.append(h.value() != null ? java.util.Base64.getEncoder().encodeToString(h.value()) : "null");

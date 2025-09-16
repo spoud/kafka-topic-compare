@@ -1,32 +1,36 @@
 package io.spoud.kafka.topiccompare;
 
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.Config;
 import org.apache.kafka.clients.admin.DescribeConfigsResult;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.config.ConfigResource;
+import org.apache.kafka.common.header.Header;
 
-import java.util.*;
 import java.time.Duration;
+import java.util.*;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 public class TopicCompareService {
     // Unified compareTopics implementation
     private CompareResult compareTopicsImpl(Properties propsA, String topicA, Properties propsB, String topicB, int maxMessages, DifferenceLogger logger, Long startTimestamp, boolean compacted, Set<String> skipHeaderNames, boolean disableHeaderComparison) {
         // Helper to create a unique string from key only (for compacted) or key+value (for normal)
-        java.util.function.BiFunction<byte[], byte[], String> keyHash = (keyBytes, valueBytes) -> {
+        BiFunction<byte[], byte[], String> keyHash = (keyBytes, valueBytes) -> {
             if (keyBytes != null) {
-                return java.util.Base64.getEncoder().encodeToString(keyBytes);
+                return Base64.getEncoder().encodeToString(keyBytes);
             } else if (valueBytes != null) {
-                return "null:" + java.util.Arrays.hashCode(valueBytes);
+                return "null:" + Arrays.hashCode(valueBytes);
             } else {
                 return "null:null";
             }
         };
         // Helper to create a unique string from key, value, and timestamp for duplicate detection
-        java.util.function.Function<ConsumerRecord<byte[], byte[]>, String> duplicateKey = record -> {
-            return java.util.Base64.getEncoder().encodeToString(record.key() == null ? new byte[0] : record.key()) +
-                    ":" + java.util.Base64.getEncoder().encodeToString(record.value() == null ? new byte[0] : record.value()) +
+        Function<ConsumerRecord<byte[], byte[]>, String> duplicateKey = record -> {
+            return Base64.getEncoder().encodeToString(record.key() == null ? new byte[0] : record.key()) +
+                    ":" + Base64.getEncoder().encodeToString(record.value() == null ? new byte[0] : record.value()) +
                     ":" + record.timestamp();
         };
         // Always initialize statsA and statsB with empty maps to avoid NullPointerException
@@ -35,21 +39,21 @@ public class TopicCompareService {
         try (KafkaConsumer<byte[], byte[]> consumerA = new KafkaConsumer<>(propsA);
              KafkaConsumer<byte[], byte[]> consumerB = new KafkaConsumer<>(propsB)) {
             // --- Refactored per-partition message reading for topic A ---
-            Map<org.apache.kafka.common.TopicPartition, Long> lastOffsetsA = new HashMap<>();
-            Map<org.apache.kafka.common.TopicPartition, Long> effectiveStartOffsetsA = new HashMap<>();
+            Map<TopicPartition, Long> lastOffsetsA = new HashMap<>();
+            Map<TopicPartition, Long> effectiveStartOffsetsA = new HashMap<>();
             Map<String, ConsumerRecord<byte[], byte[]>> recordsA = new HashMap<>();
             Set<String> seenA = new HashSet<>();
             List<String> orderA = new ArrayList<>();
             // Track partitions for each key in A
             Map<String, Set<Integer>> keyPartitionsA = new HashMap<>();
-            org.apache.kafka.common.TopicPartition[] partitionsA = consumerA.partitionsFor(topicA).stream()
-                    .map(p -> new org.apache.kafka.common.TopicPartition(topicA, p.partition()))
-                    .toArray(org.apache.kafka.common.TopicPartition[]::new);
-            for (org.apache.kafka.common.TopicPartition partition : partitionsA) {
+            TopicPartition[] partitionsA = consumerA.partitionsFor(topicA).stream()
+                    .map(p -> new TopicPartition(topicA, p.partition()))
+                    .toArray(TopicPartition[]::new);
+            for (TopicPartition partition : partitionsA) {
                 consumerA.assign(Collections.singletonList(partition));
                 long startOffset;
                 if (startTimestamp != null) {
-                    Map<org.apache.kafka.common.TopicPartition, Long> timestampMap = Map.of(partition, startTimestamp);
+                    Map<TopicPartition, Long> timestampMap = Map.of(partition, startTimestamp);
                     var offsets = consumerA.offsetsForTimes(timestampMap);
                     var offsetAndTimestamp = offsets.get(partition);
                     if (offsetAndTimestamp != null) {
@@ -110,19 +114,19 @@ public class TopicCompareService {
             statsA.startOffsets = new HashMap<>(effectiveStartOffsetsA);
 
             // --- Refactored per-partition message reading for topic B ---
-            Map<org.apache.kafka.common.TopicPartition, Long> lastOffsetsB = new HashMap<>();
-            Map<org.apache.kafka.common.TopicPartition, Long> effectiveStartOffsetsB = new HashMap<>();
+            Map<TopicPartition, Long> lastOffsetsB = new HashMap<>();
+            Map<TopicPartition, Long> effectiveStartOffsetsB = new HashMap<>();
             Map<String, ConsumerRecord<byte[], byte[]>> recordsB = new HashMap<>();
             Set<String> seenB = new HashSet<>();
             List<String> orderB = new ArrayList<>();
-            org.apache.kafka.common.TopicPartition[] partitionsB = consumerB.partitionsFor(topicB).stream()
-                    .map(p -> new org.apache.kafka.common.TopicPartition(topicB, p.partition()))
-                    .toArray(org.apache.kafka.common.TopicPartition[]::new);
-            for (org.apache.kafka.common.TopicPartition partition : partitionsB) {
+            TopicPartition[] partitionsB = consumerB.partitionsFor(topicB).stream()
+                    .map(p -> new TopicPartition(topicB, p.partition()))
+                    .toArray(TopicPartition[]::new);
+            for (TopicPartition partition : partitionsB) {
                 consumerB.assign(Collections.singletonList(partition));
                 long startOffset;
                 if (startTimestamp != null) {
-                    Map<org.apache.kafka.common.TopicPartition, Long> timestampMap = Map.of(partition, startTimestamp);
+                    Map<TopicPartition, Long> timestampMap = Map.of(partition, startTimestamp);
                     var offsets = consumerB.offsetsForTimes(timestampMap);
                     var offsetAndTimestamp = offsets.get(partition);
                     if (offsetAndTimestamp != null) {
@@ -338,13 +342,13 @@ public class TopicCompareService {
         if (a == null || b == null) return false;
         var ha = a.headers();
         var hb = b.headers();
-        java.util.Map<String, byte[]> mapA = new java.util.HashMap<>();
-        java.util.Map<String, byte[]> mapB = new java.util.HashMap<>();
-        for (org.apache.kafka.common.header.Header headerA : ha) {
+        Map<String, byte[]> mapA = new HashMap<>();
+        Map<String, byte[]> mapB = new HashMap<>();
+        for (Header headerA : ha) {
             if (skipHeaderNames != null && skipHeaderNames.contains(headerA.key())) continue;
             mapA.put(headerA.key(), headerA.value());
         }
-        for (org.apache.kafka.common.header.Header headerB : hb) {
+        for (Header headerB : hb) {
             if (skipHeaderNames != null && skipHeaderNames.contains(headerB.key())) continue;
             mapB.put(headerB.key(), headerB.value());
         }

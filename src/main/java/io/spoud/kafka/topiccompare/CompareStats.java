@@ -1,6 +1,7 @@
 package io.spoud.kafka.topiccompare;
 
 import org.apache.kafka.common.TopicPartition;
+
 import java.util.Map;
 
 public class CompareStats {
