@@ -19,13 +19,14 @@ import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 public class TopicCompareServiceTest {
+    private static final String KAFKA_IMAGE = "apache/kafka-native:4.3.1";
     static KafkaContainer kafkaA;
     static KafkaContainer kafkaB;
 
     @BeforeAll
     static void setup() {
-        kafkaA = new KafkaContainer("apache/kafka-native");
-        kafkaB = new KafkaContainer("apache/kafka-native");
+        kafkaA = new KafkaContainer(KAFKA_IMAGE);
+        kafkaB = new KafkaContainer(KAFKA_IMAGE);
         kafkaA.start();
         kafkaB.start();
     }
