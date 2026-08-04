@@ -19,7 +19,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 public class TopicCompareServiceTest {
-    private static final String KAFKA_IMAGE = "apache/kafka-native:4.3.1";
+    private static final String KAFKA_IMAGE = "apache/kafka:4.3.1";
     static KafkaContainer kafkaA;
     static KafkaContainer kafkaB;
 
